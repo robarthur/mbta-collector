@@ -1,6 +1,9 @@
-"""Entry Worker + Collector Durable Object for the North Station platform collector.
+"""Entry Worker + Collector Durable Object for the CR platform collector.
 
-- Collector (DurableObject): owns the ~15s poll loop via its alarm(); writes to D1.
+Collects multiple multi-platform Commuter Rail stations (North, South, Back Bay).
+
+- Collector (DurableObject): owns the ~15s poll loop via its alarm(); polls every
+  station each cycle and writes to D1.
 - Default (WorkerEntrypoint): serves /health, /board, /analyze, /poll-once (reads D1),
   and keeps the DO alarm armed (on request + via the 1-min cron backstop).
 
@@ -10,7 +13,7 @@ mbta.py / sql.py / timeutil.py.
 
 from workers import WorkerEntrypoint, Response, DurableObject
 from js import JSON
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 import json
 
 import mbta
@@ -18,7 +21,7 @@ import sql
 import timeutil
 
 POLL_INTERVAL_MS = 15_000
-DO_NAME = "north-station"
+DO_NAME = "collector"
 
 
 def env_get(env, name):
@@ -78,57 +81,64 @@ class Collector(DurableObject):
         """Run one poll synchronously (used by /poll-once for fast feedback)."""
         return await self._poll()
 
+    async def _track_map(self, station_id, api_key):
+        """Lazily fetch + cache each station's child-stop -> platform_code map."""
+        cache = getattr(self, "_tmaps", None)
+        if cache is None:
+            cache = {}
+            self._tmaps = cache
+        if station_id not in cache:
+            cache[station_id] = await mbta.fetch_track_map(station_id, api_key)
+        return cache[station_id]
+
     # --- the actual work ---------------------------------------------------
     async def _poll(self):
         api_key = env_get(self.env, "MBTA_API_KEY")
-        payload = await mbta.fetch_predictions(api_key)
-        observations, occupancy = mbta.parse_payload(payload)
-
         ts = timeutil.now_iso()
+        service_date = timeutil.service_date()
         db = self.env.DB
 
         res = await _bound(db, sql.INSERT_POLL, [ts]).all()
         poll_id = _rows(res)[0]["poll_id"]
 
-        if observations:
-            obs_stmts = [
-                _bound(db, sql.INSERT_OBS, [
-                    poll_id, o["trip_id"], o["vehicle_id"], o["route_id"],
+        obs_stmts = []
+        event_stmts = []
+        summary = {}
+        for key, spec in mbta.STATIONS.items():
+            track_map = await self._track_map(spec["station_id"], api_key)
+            payload = await mbta.fetch_predictions(spec["station_id"], api_key)
+            observations, occupancy = mbta.parse_payload(payload, track_map)
+
+            events = 0
+            for o in observations:
+                obs_stmts.append(_bound(db, sql.INSERT_OBS, [
+                    poll_id, key, o["trip_id"], o["vehicle_id"], o["route_id"],
                     o["direction_id"], o["current_status"], o["current_stop_sequence"],
                     o["vehicle_stop_id"], o["latitude"], o["longitude"], o["speed"],
                     o["bearing"], o["pred_stop_id"], o["arrival_time"],
                     o["departure_time"], o["status_text"],
-                ])
-                for o in observations
-            ]
-            await db.batch(obs_stmts)
+                ]))
+                track, via = mbta.known_track(o, track_map)
+                if track:
+                    event_stmts.append(_bound(db, sql.INSERT_EVENT, [
+                        o["trip_id"], key, o["vehicle_id"], o["route_id"], service_date,
+                        track, via, ts, o.get("arrival_time"), o.get("departure_time"),
+                        timeutil.lead_seconds(o.get("arrival_time"), ts),
+                        timeutil.lead_seconds(o.get("departure_time"), ts),
+                    ]))
+                    events += 1
+            summary[key] = {
+                "observations": len(observations),
+                "events_seen": events,
+                "occupancy": occupancy,
+            }
 
-        service_date = timeutil.service_date()
-        event_count = 0
-        event_stmts = []
-        for o in observations:
-            track, via = mbta.known_track(o)
-            if not track:
-                continue
-            event_stmts.append(
-                _bound(db, sql.INSERT_EVENT, [
-                    o["trip_id"], o["vehicle_id"], o["route_id"], service_date,
-                    track, via, ts, o.get("arrival_time"), o.get("departure_time"),
-                    timeutil.lead_seconds(o.get("arrival_time"), ts),
-                    timeutil.lead_seconds(o.get("departure_time"), ts),
-                ])
-            )
-            event_count += 1
+        if obs_stmts:
+            await db.batch(obs_stmts)
         if event_stmts:
             await db.batch(event_stmts)
 
-        return {
-            "poll_id": poll_id,
-            "ts": ts,
-            "observations": len(observations),
-            "events_seen": event_count,
-            "occupancy": occupancy,
-        }
+        return {"poll_id": poll_id, "ts": ts, "stations": summary}
 
 
 class Default(WorkerEntrypoint):
@@ -141,7 +151,10 @@ class Default(WorkerEntrypoint):
         await self._collector().arm()
 
     async def fetch(self, request):
-        path = urlparse(request.url).path
+        parts = urlparse(request.url)
+        path = parts.path
+        query = parse_qs(parts.query)
+        station = (query.get("station") or ["north"])[0]
 
         # Best-effort: make sure the poll loop is running.
         try:
@@ -150,43 +163,53 @@ class Default(WorkerEntrypoint):
             pass
 
         if path in ("/", ""):
+            stations = ", ".join(f"{k} ({s['name']})" for k, s in mbta.STATIONS.items())
             return Response(
                 "estimated-platform collector\n"
-                "  GET /health      counts + last poll time\n"
-                "  GET /board       live 10-track occupancy + inbound trains\n"
-                "  GET /analyze     per-route track bias + lead-time stats\n"
-                "  GET /poll-once   force one poll now (debug)\n"
+                f"  stations: {stations}\n"
+                "  GET /health             counts + last poll time\n"
+                "  GET /board?station=KEY  live occupancy + inbound trains (default north)\n"
+                "  GET /analyze            per-station/route track bias + lead-time stats\n"
+                "  GET /poll-once          force one poll of every station now (debug)\n"
             )
 
         db = self.env.DB
 
         if path == "/health":
             row = (_rows(await db.prepare(sql.HEALTH).all()) or [{}])[0]
-            return Response.json({"status": "ok", **row})
+            by_station = _rows(await db.prepare(sql.EVENTS_BY_STATION).all())
+            return Response.json({"status": "ok", "events_by_station": by_station, **row})
 
         if path == "/poll-once":
             result = await self._collector().poll_now()
             return Response.json(result)
 
         if path == "/board":
-            return Response.json(await self._board(db))
+            return Response.json(await self._board(db, station))
 
         if path == "/analyze":
             return Response.json(await self._analyze(db))
 
         return Response("Not Found", status=404)
 
-    async def _board(self, db):
+    async def _board(self, db, station):
+        spec = mbta.STATIONS.get(station)
+        if spec is None:
+            return {"error": "unknown station", "valid": list(mbta.STATIONS.keys())}
+
+        api_key = env_get(self.env, "MBTA_API_KEY")
+        track_map = await mbta.fetch_track_map(spec["station_id"], api_key)
+
         latest = _rows(await db.prepare(sql.LATEST_POLL).all())
         if not latest:
             return {"status": "no data yet"}
         poll = latest[0]
-        obs = _rows(await _bound(db, sql.OBS_FOR_POLL, [poll["poll_id"]]).all())
+        obs = _rows(await _bound(db, sql.OBS_FOR_POLL, [poll["poll_id"], station]).all())
 
-        tracks = {str(i): None for i in range(1, 11)}
+        tracks = {t: None for t in mbta.tracks_of(track_map)}
         for o in obs:
             if o.get("current_status") == "STOPPED_AT":
-                t = mbta.track_from_stop(o.get("vehicle_stop_id"))
+                t = mbta.track_from_stop(o.get("vehicle_stop_id"), track_map)
                 if t:
                     tracks[t] = {
                         "vehicle": o.get("vehicle_id"),
@@ -198,7 +221,7 @@ class Default(WorkerEntrypoint):
         for o in obs:
             if not o.get("arrival_time"):
                 continue
-            track, via = mbta.known_track(o)
+            track, via = mbta.known_track(o, track_map)
             inbound.append({
                 "trip": o.get("trip_id"),
                 "route": o.get("route_id"),
@@ -210,11 +233,17 @@ class Default(WorkerEntrypoint):
                 "via": via,
             })
 
-        return {"poll": poll, "occupancy": tracks, "inbound": inbound}
+        return {
+            "station": station,
+            "name": spec["name"],
+            "poll": poll,
+            "occupancy": tracks,
+            "inbound": inbound,
+        }
 
     async def _analyze(self, db):
         return {
             "route_track_distribution": _rows(await db.prepare(sql.ROUTE_TRACK_DIST).all()),
             "resolved_via": _rows(await db.prepare(sql.RESOLVED_VIA_DIST).all()),
-            "lead_time_summary": (_rows(await db.prepare(sql.LEAD_SUMMARY).all()) or [{}])[0],
+            "lead_time_summary_by_station": _rows(await db.prepare(sql.LEAD_SUMMARY).all()),
         }

@@ -1,7 +1,17 @@
 # estimated-platform
 
 A data collector for studying **which platform (track) Commuter Rail trains arrive at**
-at MBTA **North Station**.
+at MBTA multi-platform stations. Collects three stations each poll:
+
+| Key | Station | Tracks | Character |
+|-----|---------|--------|-----------|
+| `north` | North Station (`place-north`) | 10 | Stub-end terminal — dynamic, late track assignment |
+| `south` | South Station (`place-sstat`) | 13 | Stub-end terminal — dynamic, late track assignment |
+| `backbay` | Back Bay (`place-bbsta`) | 5 (two stop families) | Through-station — track largely from schedule (contrast) |
+
+Tracks are resolved per station from the API's child-stop → `platform_code` map, so Back
+Bay's mixed `NEC-2276-*` / `WML-0012-*` platforms are handled the same as a single-family
+station.
 
 ## Why this exists
 
@@ -30,10 +40,10 @@ Pure logic lives in `src/mbta.py` (API client + parsing), `src/sql.py`, `src/tim
 
 | Route | What |
 |-------|------|
-| `GET /health` | row counts + last poll time |
-| `GET /board` | live 10-track occupancy grid + inbound trains (track known? yes/no) |
-| `GET /analyze` | per-route track distribution + lead-time-to-arrival/departure summary |
-| `GET /poll-once` | force one poll now (debug) |
+| `GET /health` | row counts + last poll time + events per station |
+| `GET /board?station=north\|south\|backbay` | live occupancy grid + inbound trains (track known? yes/no); default `north` |
+| `GET /analyze` | per-station/route track distribution + lead-time summary per station |
+| `GET /poll-once` | force one poll of every station now (debug) |
 
 ## Local development
 
@@ -78,8 +88,9 @@ Once deployed, the DO alarm self-sustains the ~15s loop; the cron backstop re-ar
 - Pyodide gotcha baked into `_bound()` (`src/entry.py`): Python `None` crosses into JS as
   `undefined`, which D1 rejects. Params are JSON-encoded in Python and `JSON.parse`d in JS
   so `null` survives. (`run_js`/`eval` is unavailable — workerd forbids code-gen.)
-- An MBTA API key is optional at this volume (15s polling). Without a key the public
-  limit (~20 req/min) is still comfortably enough.
+- With 3 stations, each 15s poll makes ~3 prediction requests (~12/min). That's near the
+  keyless public limit (~20/min), so set `MBTA_API_KEY` for headroom (raises to ~1000/min).
+  Track maps are fetched once per station and cached in the Durable Object.
 - Cost: D1 + Workers + DO alarms are request/alarm-billed (no always-on compute).
 - Expected early finding from `/analyze`: lead-to-arrival clusters near zero/negative —
   i.e. the official feed reveals the track only as the train arrives. That's the gap a

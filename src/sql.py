@@ -4,23 +4,23 @@ INSERT_POLL = "INSERT INTO polls (ts) VALUES (?) RETURNING poll_id"
 
 INSERT_OBS = (
     "INSERT INTO observations ("
-    "poll_id, trip_id, vehicle_id, route_id, direction_id, current_status, "
+    "poll_id, station, trip_id, vehicle_id, route_id, direction_id, current_status, "
     "current_stop_sequence, vehicle_stop_id, latitude, longitude, speed, bearing, "
     "pred_stop_id, arrival_time, departure_time, status_text"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 # PK (trip_id, service_date) + OR IGNORE = record each resolution exactly once, no extra state.
 INSERT_EVENT = (
     "INSERT OR IGNORE INTO track_events ("
-    "trip_id, vehicle_id, route_id, service_date, resolved_track, resolved_via, "
+    "trip_id, station, vehicle_id, route_id, service_date, resolved_track, resolved_via, "
     "resolved_ts, predicted_arrival, scheduled_departure, lead_to_arrival_s, lead_to_departure_s"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 LATEST_POLL = "SELECT poll_id, ts FROM polls ORDER BY poll_id DESC LIMIT 1"
 
-OBS_FOR_POLL = "SELECT * FROM observations WHERE poll_id = ?"
+OBS_FOR_POLL = "SELECT * FROM observations WHERE poll_id = ? AND station = ?"
 
 HEALTH = (
     "SELECT "
@@ -30,21 +30,26 @@ HEALTH = (
     "(SELECT MAX(ts) FROM polls) AS last_poll_ts"
 )
 
+EVENTS_BY_STATION = (
+    "SELECT station, COUNT(*) AS n FROM track_events GROUP BY station ORDER BY station"
+)
+
 ROUTE_TRACK_DIST = (
-    "SELECT route_id, resolved_track, COUNT(*) AS n "
-    "FROM track_events GROUP BY route_id, resolved_track "
-    "ORDER BY route_id, n DESC"
+    "SELECT station, route_id, resolved_track, COUNT(*) AS n "
+    "FROM track_events GROUP BY station, route_id, resolved_track "
+    "ORDER BY station, route_id, n DESC"
 )
 
 LEAD_SUMMARY = (
-    "SELECT COUNT(*) AS events, "
+    "SELECT station, COUNT(*) AS events, "
     "AVG(lead_to_arrival_s) AS avg_lead_arrival_s, "
     "MIN(lead_to_arrival_s) AS min_lead_arrival_s, "
     "MAX(lead_to_arrival_s) AS max_lead_arrival_s, "
     "AVG(lead_to_departure_s) AS avg_lead_departure_s "
-    "FROM track_events"
+    "FROM track_events GROUP BY station ORDER BY station"
 )
 
 RESOLVED_VIA_DIST = (
-    "SELECT resolved_via, COUNT(*) AS n FROM track_events GROUP BY resolved_via ORDER BY n DESC"
+    "SELECT station, resolved_via, COUNT(*) AS n "
+    "FROM track_events GROUP BY station, resolved_via ORDER BY station, n DESC"
 )

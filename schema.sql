@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS polls (
 -- Raw per-trip snapshot for each poll (prediction joined with its vehicle).
 CREATE TABLE IF NOT EXISTS observations (
   poll_id               INTEGER NOT NULL,
+  station               TEXT NOT NULL,  -- north | south | backbay
   trip_id               TEXT,
   vehicle_id            TEXT,
   route_id              TEXT,
@@ -27,10 +28,12 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 CREATE INDEX IF NOT EXISTS idx_obs_poll ON observations(poll_id);
 CREATE INDEX IF NOT EXISTS idx_obs_trip ON observations(trip_id);
+CREATE INDEX IF NOT EXISTS idx_obs_station ON observations(station);
 
 -- First moment we learned a trip's track on a given service day (ground truth + lead time).
 CREATE TABLE IF NOT EXISTS track_events (
   trip_id             TEXT NOT NULL,
+  station             TEXT NOT NULL,    -- north | south | backbay
   vehicle_id          TEXT,
   route_id            TEXT,
   service_date        TEXT NOT NULL,    -- America/New_York date, ~3am rollover
@@ -44,3 +47,4 @@ CREATE TABLE IF NOT EXISTS track_events (
   PRIMARY KEY (trip_id, service_date)
 );
 CREATE INDEX IF NOT EXISTS idx_te_route ON track_events(route_id);
+CREATE INDEX IF NOT EXISTS idx_te_station ON track_events(station);

@@ -1,37 +1,73 @@
-"""MBTA V3 API client + parsing for North Station Commuter Rail.
+"""MBTA V3 API client + parsing for Commuter Rail terminals.
 
-One request per poll: predictions at North Station (route_type=2) with the related
-vehicle included, so we get each train's live position/status/stop in the same payload.
+One predictions request per station per poll: predictions at the station (route_type=2)
+with the related vehicle included, so we get each train's live position/status/stop in the
+same payload.
+
+Tracks are resolved via a per-station child-stop -> platform_code map fetched from the API
+(see fetch_track_map). This avoids assuming a single stop-id prefix per station -- Back Bay,
+for example, spans two stop families (NEC-2276-* and WML-0012-*).
 """
 
 import httpx
 
 API_BASE = "https://api-v3.mbta.com"
-STATION = "place-north"        # North Station parent
-TRACK_PREFIX = "BNT-0000-"     # child stops BNT-0000-01 .. BNT-0000-10 carry the track number
-ROUTE_TYPE_CR = "2"            # Commuter Rail
+ROUTE_TYPE_CR = "2"
+
+# Multi-platform CR terminals/stations we collect. North & South are stub-end terminals
+# that assign tracks dynamically/late (the interesting case); Back Bay is a through-station
+# that largely resolves from the schedule (useful contrast).
+STATIONS = {
+    "north":   {"name": "North Station", "station_id": "place-north"},
+    "south":   {"name": "South Station", "station_id": "place-sstat"},
+    "backbay": {"name": "Back Bay",      "station_id": "place-bbsta"},
+}
 
 
-def track_from_stop(stop_id):
-    """'BNT-0000-03' -> '3'; anything else (incl. generic 'BNT-0000') -> None."""
-    if not stop_id or not stop_id.startswith(TRACK_PREFIX):
-        return None
-    suffix = stop_id[len(TRACK_PREFIX):]
-    return str(int(suffix)) if suffix.isdigit() else suffix
+def _headers(api_key):
+    h = {"accept": "application/vnd.api+json"}
+    if api_key:
+        h["x-api-key"] = api_key
+    return h
 
 
-async def fetch_predictions(api_key=None):
+async def fetch_track_map(station_id, api_key=None):
+    """Return {child_stop_id: platform_code} for the station's CR track platforms."""
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(
+            f"{API_BASE}/stops/{station_id}",
+            params={"include": "child_stops"},
+            headers=_headers(api_key),
+        )
+        r.raise_for_status()
+        payload = r.json()
+    out = {}
+    for s in payload.get("included") or []:
+        a = s.get("attributes") or {}
+        if a.get("vehicle_type") == 2 and a.get("platform_code"):
+            out[s.get("id")] = str(a.get("platform_code"))
+    return out
+
+
+def tracks_of(track_map):
+    """Sorted list of platform codes for a station (numeric-aware)."""
+    return sorted(set(track_map.values()), key=lambda t: (int(t) if t.isdigit() else 9999, t))
+
+
+def track_from_stop(stop_id, track_map):
+    """Platform code for a stop id, or None for the generic (track-less) station stop."""
+    return track_map.get(stop_id) if stop_id else None
+
+
+async def fetch_predictions(station_id, api_key=None):
     params = {
-        "filter[stop]": STATION,
+        "filter[stop]": station_id,
         "filter[route_type]": ROUTE_TYPE_CR,
         "include": "vehicle",
         "sort": "arrival_time",
     }
-    headers = {"accept": "application/vnd.api+json"}
-    if api_key:
-        headers["x-api-key"] = api_key
     async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.get(f"{API_BASE}/predictions", params=params, headers=headers)
+        r = await client.get(f"{API_BASE}/predictions", params=params, headers=_headers(api_key))
         r.raise_for_status()
         return r.json()
 
@@ -41,10 +77,10 @@ def _rel_id(rel, name):
     return data.get("id")
 
 
-def parse_payload(payload):
+def parse_payload(payload, track_map):
     """Return (observations, occupancy).
 
-    observations: list of dicts, one per North Station CR prediction joined with its vehicle.
+    observations: list of dicts, one per station CR prediction joined with its vehicle.
     occupancy:    dict track -> vehicle_id for tracks with a train currently STOPPED_AT.
     """
     included = payload.get("included") or []
@@ -91,23 +127,23 @@ def parse_payload(payload):
     occupancy = {}
     for vid, v in vehicles.items():
         if v.get("current_status") == "STOPPED_AT":
-            t = track_from_stop(v.get("stop_id"))
+            t = track_from_stop(v.get("stop_id"), track_map)
             if t:
                 occupancy[t] = vid
 
     return observations, occupancy
 
 
-def known_track(obs):
+def known_track(obs, track_map):
     """(track, via) for an observation, or (None, None) if the track isn't knowable yet.
 
     Prefer the assigned prediction stop; fall back to a vehicle physically STOPPED_AT a track.
     """
-    t = track_from_stop(obs.get("pred_stop_id"))
+    t = track_from_stop(obs.get("pred_stop_id"), track_map)
     if t:
         return t, "prediction_stop"
     if obs.get("current_status") == "STOPPED_AT":
-        t = track_from_stop(obs.get("vehicle_stop_id"))
+        t = track_from_stop(obs.get("vehicle_stop_id"), track_map)
         if t:
             return t, "vehicle_stopped_at"
     return None, None
