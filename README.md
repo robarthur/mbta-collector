@@ -37,14 +37,19 @@ Pure logic lives in `src/mbta.py` (API client + parsing), `src/sql.py`, `src/tim
 
 ## Local development
 
-```bash
-npm install                       # gets wrangler
-uv sync                           # python deps (httpx) + workers dev tooling
+Python Workers must be driven through **`pywrangler`** (from the `workers-py` dev
+dependency), which vendors the `pyproject.toml` dependencies (`httpx`) into the worker
+bundle before proxying to `wrangler`. Plain `npx wrangler dev` will fail with
+`ModuleNotFoundError: httpx`.
 
-# create + seed a LOCAL D1
+```bash
+npm install                       # gets wrangler (CLI)
+uv sync                           # python deps + pywrangler tooling
+
+# create + seed a LOCAL D1 (d1 execute needs no bundling, so npx wrangler is fine)
 npx wrangler d1 execute estimated-platform --local --file schema.sql
 
-npx wrangler dev                  # runs the Python Worker + DO + local D1
+uv run pywrangler dev             # runs the Python Worker + DO + local D1
 # then:  curl localhost:8787/poll-once   and   curl localhost:8787/board
 ```
 
@@ -60,7 +65,7 @@ npx wrangler d1 execute estimated-platform --local \
 ```bash
 npx wrangler d1 create estimated-platform        # paste the database_id into wrangler.jsonc
 npx wrangler d1 execute estimated-platform --remote --file schema.sql
-npx wrangler deploy
+uv run pywrangler deploy                          # bundles httpx, then deploys
 npx wrangler secret put MBTA_API_KEY             # optional; raises rate limit to ~1000/min
 ```
 
@@ -68,7 +73,11 @@ Once deployed, the DO alarm self-sustains the ~15s loop; the cron backstop re-ar
 
 ## Notes / caveats
 
-- Runs on the **beta** Python Workers runtime (Pyodide). Deps: `httpx` only.
+- Runs on the **beta** Python Workers runtime (Pyodide = CPython compiled to WASM,
+  running inside the JS isolate). Deps: `httpx` only.
+- Pyodide gotcha baked into `_bound()` (`src/entry.py`): Python `None` crosses into JS as
+  `undefined`, which D1 rejects. Params are JSON-encoded in Python and `JSON.parse`d in JS
+  so `null` survives. (`run_js`/`eval` is unavailable — workerd forbids code-gen.)
 - An MBTA API key is optional at this volume (15s polling). Without a key the public
   limit (~20 req/min) is still comfortably enough.
 - Cost: D1 + Workers + DO alarms are request/alarm-billed (no always-on compute).
