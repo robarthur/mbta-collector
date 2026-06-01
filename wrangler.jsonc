@@ -4,8 +4,7 @@
 	"main": "src/entry.py",
 	"compatibility_date": "2025-11-02",
 	"compatibility_flags": [
-		"python_workers",
-		"python_dedicated_snapshot"
+		"python_workers"
 	],
 	// D1: durable store. For local `wrangler dev` the placeholder id is fine.
 	// After `wrangler d1 create estimated-platform`, paste the real database_id here.

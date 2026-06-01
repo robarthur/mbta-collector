@@ -63,9 +63,13 @@ def _rows(res):
 class Collector(DurableObject):
     # --- alarm lifecycle ---------------------------------------------------
     async def arm(self):
-        """Ensure the self-sustaining alarm loop is running."""
+        """Ensure the self-sustaining alarm loop is running.
+
+        getAlarm() returns JS null (falsy, not Python None) when no alarm is set, so test
+        truthiness rather than `is None`. A set alarm is a positive epoch-ms int (truthy).
+        """
         current = await self.ctx.storage.getAlarm()
-        if current is None:
+        if not current:
             self.ctx.storage.setAlarm(timeutil.now_ms() + POLL_INTERVAL_MS)
             return "armed"
         return "already-armed"
