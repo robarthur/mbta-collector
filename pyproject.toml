@@ -1,0 +1,15 @@
+[project]
+name = "estimated-platform"
+version = "0.1.0"
+description = "Collect MBTA North Station Commuter Rail track assignments + movement to study arrival-platform prediction"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]

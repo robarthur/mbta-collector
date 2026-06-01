@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "estimated-platform",
+  "main": "src/entry.py",
+  "compatibility_date": "2025-11-02",
+  "compatibility_flags": [
+    "python_workers",
+    "python_dedicated_snapshot"
+  ],
+  // D1: durable store. For local `wrangler dev` the placeholder id is fine.
+  // After `wrangler d1 create estimated-platform`, paste the real database_id here.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "estimated-platform",
+      "database_id": "REPLACE_WITH_DB_ID"
+    }
+  ],
+  // The Collector Durable Object owns the ~15s poll loop via its alarm().
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COLLECTOR",
+        "class_name": "Collector"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "Collector"
+      ]
+    }
+  ],
+  // Backstop: re-arm the DO alarm once a minute in case the chain ever breaks.
+  "triggers": {
+    "crons": [
+      "*/1 * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  }
+}
