@@ -19,6 +19,7 @@ import json
 import mbta
 import sql
 import timeutil
+import ui
 
 POLL_INTERVAL_MS = 15_000
 DO_NAME = "collector"
@@ -166,16 +167,8 @@ class Default(WorkerEntrypoint):
         except Exception:
             pass
 
-        if path in ("/", ""):
-            stations = ", ".join(f"{k} ({s['name']})" for k, s in mbta.STATIONS.items())
-            return Response(
-                "estimated-platform collector\n"
-                f"  stations: {stations}\n"
-                "  GET /health             counts + last poll time\n"
-                "  GET /board?station=KEY  live occupancy + inbound trains (default north)\n"
-                "  GET /analyze            per-station/route track bias + lead-time stats\n"
-                "  GET /poll-once          force one poll of every station now (debug)\n"
-            )
+        if path in ("/", "", "/ui"):
+            return Response(ui.PAGE, headers={"content-type": "text/html;charset=UTF-8"})
 
         db = self.env.DB
 
