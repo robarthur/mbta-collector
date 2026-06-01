@@ -21,7 +21,8 @@ import sql
 import timeutil
 import ui
 
-POLL_INTERVAL_MS = 15_000
+POLL_INTERVAL_MS = 15_000        # how often we poll MBTA + detect track resolutions
+SNAPSHOT_INTERVAL_MS = 120_000   # how often we persist a full observations snapshot
 DO_NAME = "collector"
 
 
@@ -103,8 +104,20 @@ class Collector(DurableObject):
         service_date = timeutil.service_date()
         db = self.env.DB
 
-        res = await _bound(db, sql.INSERT_POLL, [ts]).all()
-        poll_id = _rows(res)[0]["poll_id"]
+        # Decoupled cadence to stay within D1's free daily write budget:
+        # - track_events (the resolution moments) are written every poll (~15s) for precise
+        #   lead times; they're tiny + deduped by (trip_id, service_date).
+        # - the full observations snapshot is only written every SNAPSHOT_INTERVAL_MS.
+        # The snapshot clock lives in DO storage (free; not a D1 write).
+        now = timeutil.now_ms()
+        last = await self.ctx.storage.get("last_snapshot_ms")
+        last_ms = int(last) if last else 0
+        do_snapshot = (now - last_ms) >= SNAPSHOT_INTERVAL_MS
+
+        poll_id = None
+        if do_snapshot:
+            res = await _bound(db, sql.INSERT_POLL, [ts]).all()
+            poll_id = _rows(res)[0]["poll_id"]
 
         obs_stmts = []
         event_stmts = []
@@ -116,14 +129,15 @@ class Collector(DurableObject):
 
             events = 0
             for o in observations:
-                obs_stmts.append(_bound(db, sql.INSERT_OBS, [
-                    poll_id, key, o["trip_id"], o["vehicle_id"], o["route_id"],
-                    o["direction_id"], o["current_status"], o["current_stop_sequence"],
-                    o["vehicle_stop_id"], o["latitude"], o["longitude"], o["speed"],
-                    o["bearing"], o["pred_stop_id"], o["arrival_time"],
-                    o["departure_time"], o["status_text"],
-                    o.get("route_pattern_id"), o.get("trip_name"),
-                ]))
+                if do_snapshot:
+                    obs_stmts.append(_bound(db, sql.INSERT_OBS, [
+                        poll_id, key, o["trip_id"], o["vehicle_id"], o["route_id"],
+                        o["direction_id"], o["current_status"], o["current_stop_sequence"],
+                        o["vehicle_stop_id"], o["latitude"], o["longitude"], o["speed"],
+                        o["bearing"], o["pred_stop_id"], o["arrival_time"],
+                        o["departure_time"], o["status_text"],
+                        o.get("route_pattern_id"), o.get("trip_name"),
+                    ]))
                 track, via = mbta.known_track(o, track_map)
                 if track:
                     event_stmts.append(_bound(db, sql.INSERT_EVENT, [
@@ -144,8 +158,10 @@ class Collector(DurableObject):
             await db.batch(obs_stmts)
         if event_stmts:
             await db.batch(event_stmts)
+        if do_snapshot:
+            await self.ctx.storage.put("last_snapshot_ms", now)
 
-        return {"poll_id": poll_id, "ts": ts, "stations": summary}
+        return {"poll_id": poll_id, "ts": ts, "snapshot": do_snapshot, "stations": summary}
 
 
 class Default(WorkerEntrypoint):

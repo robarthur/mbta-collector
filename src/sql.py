@@ -23,10 +23,11 @@ LATEST_POLL = "SELECT poll_id, ts FROM polls ORDER BY poll_id DESC LIMIT 1"
 
 OBS_FOR_POLL = "SELECT * FROM observations WHERE poll_id = ? AND station = ?"
 
+# Note: no COUNT(*) on observations here — it's the largest table and a full scan would
+# burn read quota on every /health (which the board polls). polls/track_events are small.
 HEALTH = (
     "SELECT "
-    "(SELECT COUNT(*) FROM polls) AS polls, "
-    "(SELECT COUNT(*) FROM observations) AS observations, "
+    "(SELECT COUNT(*) FROM polls) AS snapshots, "
     "(SELECT COUNT(*) FROM track_events) AS track_events, "
     "(SELECT MAX(ts) FROM polls) AS last_poll_ts"
 )

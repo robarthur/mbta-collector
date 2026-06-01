@@ -71,7 +71,7 @@ PAGE = """<!doctype html>
   <a href="/board?station=north">/board</a> ·
   <a href="/analyze">/analyze</a> ·
   <a href="/events">/events</a> ·
-  <a href="/health">/health</a>. Auto-refreshes every 15s.
+  <a href="/health">/health</a>. Auto-refreshes every 30s.
 </footer>
 <script>
 const STATIONS = [["north","North Station"],["south","South Station"],["backbay","Back Bay"]];
@@ -100,8 +100,8 @@ async function loadHealth() {
     const h = await (await fetch("/health")).json();
     const by = (h.events_by_station || []).map(s => `${s.station}:${s.n}`).join("  ");
     document.getElementById("meta").textContent =
-      `polls ${h.polls} · observations ${h.observations} · track events ${h.track_events}` +
-      (by ? `  (${by})` : "") + ` · last poll ${fmtTime(h.last_poll_ts)}`;
+      `track events ${h.track_events}` + (by ? ` (${by})` : "") +
+      ` · snapshots ${h.snapshots} · last poll ${fmtTime(h.last_poll_ts)}`;
   } catch (e) { document.getElementById("meta").textContent = ""; }
 }
 
@@ -176,7 +176,7 @@ async function load() {
 
 renderTabs();
 load();
-setInterval(load, 15000);
+setInterval(load, 30000);
 </script>
 </body>
 </html>

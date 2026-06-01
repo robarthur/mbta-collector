@@ -28,9 +28,10 @@ CREATE TABLE IF NOT EXISTS observations (
   route_pattern_id      TEXT,           -- branch within a line, e.g. CR-Newburyport-...-1
   trip_name             TEXT            -- train number, e.g. "1246"
 );
+-- Only index poll_id: the board reads observations by poll_id. trip/station indexes were
+-- dropped to cut write amplification (each index counts toward D1 rows-written). Add them
+-- back for the analysis phase if needed.
 CREATE INDEX IF NOT EXISTS idx_obs_poll ON observations(poll_id);
-CREATE INDEX IF NOT EXISTS idx_obs_trip ON observations(trip_id);
-CREATE INDEX IF NOT EXISTS idx_obs_station ON observations(station);
 
 -- First moment we learned a trip's track on a given service day (ground truth + lead time).
 CREATE TABLE IF NOT EXISTS track_events (
