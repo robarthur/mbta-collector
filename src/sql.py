@@ -53,3 +53,9 @@ RESOLVED_VIA_DIST = (
     "SELECT station, resolved_via, COUNT(*) AS n "
     "FROM track_events GROUP BY station, resolved_via ORDER BY station, n DESC"
 )
+
+RECENT_EVENTS = (
+    "SELECT station, route_id, resolved_track, resolved_via, resolved_ts, "
+    "lead_to_arrival_s, lead_to_departure_s "
+    "FROM track_events ORDER BY resolved_ts DESC LIMIT 25"
+)

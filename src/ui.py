@@ -62,12 +62,15 @@ PAGE = """<!doctype html>
   <div class="grid" id="grid"></div>
   <h2>Inbound trains</h2>
   <div id="inbound"></div>
+  <h2>Recent resolutions <span class="meta">(all stations)</span></h2>
+  <div id="events"></div>
 </div>
 <footer>
   Track resolved from MBTA feeds. Green = track known, grey = not yet assigned (the
   North/South prediction gap). Raw JSON:
   <a href="/board?station=north">/board</a> ·
   <a href="/analyze">/analyze</a> ·
+  <a href="/events">/events</a> ·
   <a href="/health">/health</a>. Auto-refreshes every 15s.
 </footer>
 <script>
@@ -133,6 +136,30 @@ function renderInbound(rows) {
   box.innerHTML = html + "</tbody></table>";
 }
 
+function leadMin(r) {
+  const s = (r.lead_to_departure_s != null) ? r.lead_to_departure_s : r.lead_to_arrival_s;
+  return (s == null) ? "—" : (s / 60).toFixed(1) + "m";
+}
+
+async function loadEvents() {
+  const box = document.getElementById("events");
+  try {
+    const rows = await (await fetch("/events")).json();
+    if (!rows.length) { box.innerHTML = '<div class="empty">No resolutions yet.</div>'; return; }
+    let html = "<table><thead><tr><th>Resolved</th><th>Station</th><th>Route</th>" +
+               "<th>Track</th><th>How</th><th>Lead</th></tr></thead><tbody>";
+    for (const r of rows) {
+      const berth = r.resolved_via === "vehicle_stopped_at";
+      const how = berth ? '<span class="pill known">berthed</span>'
+                        : '<span class="pill unknown">board</span>';
+      html += `<tr><td>${fmtTime(r.resolved_ts)}</td><td>${r.station}</td>` +
+              `<td class="route">${r.route_id || ""}</td><td>${r.resolved_track}</td>` +
+              `<td>${how}</td><td>${leadMin(r)}</td></tr>`;
+    }
+    box.innerHTML = html + "</tbody></table>";
+  } catch (e) { box.innerHTML = '<div class="empty err">Failed to load events.</div>'; }
+}
+
 async function load() {
   try {
     const d = await (await fetch("/board?station=" + current)).json();
@@ -144,6 +171,7 @@ async function load() {
     document.getElementById("grid").innerHTML = '<div class="empty err">Failed to load board.</div>';
   }
   loadHealth();
+  loadEvents();
 }
 
 renderTabs();

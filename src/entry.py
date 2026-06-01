@@ -187,6 +187,9 @@ class Default(WorkerEntrypoint):
         if path == "/analyze":
             return Response.json(await self._analyze(db))
 
+        if path == "/events":
+            return Response.json(_rows(await db.prepare(sql.RECENT_EVENTS).all()))
+
         return Response("Not Found", status=404)
 
     async def _board(self, db, station):
