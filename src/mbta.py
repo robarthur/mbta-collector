@@ -63,7 +63,7 @@ async def fetch_predictions(station_id, api_key=None):
     params = {
         "filter[stop]": station_id,
         "filter[route_type]": ROUTE_TYPE_CR,
-        "include": "vehicle",
+        "include": "vehicle,trip",
         "sort": "arrival_time",
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -85,29 +85,39 @@ def parse_payload(payload, track_map):
     """
     included = payload.get("included") or []
     vehicles = {}
+    trips = {}
     for inc in included:
-        if inc.get("type") != "vehicle":
-            continue
+        t = inc.get("type")
         a = inc.get("attributes") or {}
         rel = inc.get("relationships") or {}
-        vehicles[inc.get("id")] = {
-            "current_status": a.get("current_status"),
-            "current_stop_sequence": a.get("current_stop_sequence"),
-            "latitude": a.get("latitude"),
-            "longitude": a.get("longitude"),
-            "speed": a.get("speed"),
-            "bearing": a.get("bearing"),
-            "stop_id": _rel_id(rel, "stop"),
-        }
+        if t == "vehicle":
+            vehicles[inc.get("id")] = {
+                "current_status": a.get("current_status"),
+                "current_stop_sequence": a.get("current_stop_sequence"),
+                "latitude": a.get("latitude"),
+                "longitude": a.get("longitude"),
+                "speed": a.get("speed"),
+                "bearing": a.get("bearing"),
+                "stop_id": _rel_id(rel, "stop"),
+            }
+        elif t == "trip":
+            trips[inc.get("id")] = {
+                "name": a.get("name"),                       # train number, e.g. "1246"
+                "route_pattern_id": _rel_id(rel, "route_pattern"),  # branch, e.g. CR-Newburyport-...-1
+            }
 
     observations = []
     for p in payload.get("data") or []:
         a = p.get("attributes") or {}
         rel = p.get("relationships") or {}
         vehicle_id = _rel_id(rel, "vehicle")
+        trip_id = _rel_id(rel, "trip")
         v = vehicles.get(vehicle_id, {})
+        ti = trips.get(trip_id, {})
         observations.append({
-            "trip_id": _rel_id(rel, "trip"),
+            "trip_id": trip_id,
+            "trip_name": ti.get("name"),
+            "route_pattern_id": ti.get("route_pattern_id"),
             "vehicle_id": vehicle_id,
             "route_id": _rel_id(rel, "route"),
             "direction_id": a.get("direction_id"),

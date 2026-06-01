@@ -6,16 +6,17 @@ INSERT_OBS = (
     "INSERT INTO observations ("
     "poll_id, station, trip_id, vehicle_id, route_id, direction_id, current_status, "
     "current_stop_sequence, vehicle_stop_id, latitude, longitude, speed, bearing, "
-    "pred_stop_id, arrival_time, departure_time, status_text"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "pred_stop_id, arrival_time, departure_time, status_text, route_pattern_id, trip_name"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 # PK (trip_id, service_date) + OR IGNORE = record each resolution exactly once, no extra state.
 INSERT_EVENT = (
     "INSERT OR IGNORE INTO track_events ("
     "trip_id, station, vehicle_id, route_id, service_date, resolved_track, resolved_via, "
-    "resolved_ts, predicted_arrival, scheduled_departure, lead_to_arrival_s, lead_to_departure_s"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "resolved_ts, predicted_arrival, scheduled_departure, lead_to_arrival_s, lead_to_departure_s, "
+    "route_pattern_id, trip_name"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 LATEST_POLL = "SELECT poll_id, ts FROM polls ORDER BY poll_id DESC LIMIT 1"
@@ -52,6 +53,13 @@ LEAD_SUMMARY = (
 RESOLVED_VIA_DIST = (
     "SELECT station, resolved_via, COUNT(*) AS n "
     "FROM track_events GROUP BY station, resolved_via ORDER BY station, n DESC"
+)
+
+BRANCH_TRACK_DIST = (
+    "SELECT station, route_pattern_id, resolved_track, COUNT(*) AS n "
+    "FROM track_events WHERE route_pattern_id IS NOT NULL "
+    "GROUP BY station, route_pattern_id, resolved_track "
+    "ORDER BY station, route_pattern_id, n DESC"
 )
 
 RECENT_EVENTS = (

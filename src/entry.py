@@ -122,6 +122,7 @@ class Collector(DurableObject):
                     o["vehicle_stop_id"], o["latitude"], o["longitude"], o["speed"],
                     o["bearing"], o["pred_stop_id"], o["arrival_time"],
                     o["departure_time"], o["status_text"],
+                    o.get("route_pattern_id"), o.get("trip_name"),
                 ]))
                 track, via = mbta.known_track(o, track_map)
                 if track:
@@ -130,6 +131,7 @@ class Collector(DurableObject):
                         track, via, ts, o.get("arrival_time"), o.get("departure_time"),
                         timeutil.lead_seconds(o.get("arrival_time"), ts),
                         timeutil.lead_seconds(o.get("departure_time"), ts),
+                        o.get("route_pattern_id"), o.get("trip_name"),
                     ]))
                     events += 1
             summary[key] = {
@@ -244,6 +246,7 @@ class Default(WorkerEntrypoint):
     async def _analyze(self, db):
         return {
             "route_track_distribution": _rows(await db.prepare(sql.ROUTE_TRACK_DIST).all()),
+            "branch_track_distribution": _rows(await db.prepare(sql.BRANCH_TRACK_DIST).all()),
             "resolved_via": _rows(await db.prepare(sql.RESOLVED_VIA_DIST).all()),
             "lead_time_summary_by_station": _rows(await db.prepare(sql.LEAD_SUMMARY).all()),
         }

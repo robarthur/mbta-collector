@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS observations (
   pred_stop_id          TEXT,           -- prediction stop (BNT-0000 generic, or BNT-0000-0x once assigned)
   arrival_time          TEXT,
   departure_time        TEXT,
-  status_text           TEXT            -- e.g. "All aboard", "Now boarding"
+  status_text           TEXT,           -- e.g. "All aboard", "Now boarding"
+  route_pattern_id      TEXT,           -- branch within a line, e.g. CR-Newburyport-...-1
+  trip_name             TEXT            -- train number, e.g. "1246"
 );
 CREATE INDEX IF NOT EXISTS idx_obs_poll ON observations(poll_id);
 CREATE INDEX IF NOT EXISTS idx_obs_trip ON observations(trip_id);
@@ -44,6 +46,8 @@ CREATE TABLE IF NOT EXISTS track_events (
   scheduled_departure TEXT,
   lead_to_arrival_s   INTEGER,          -- predicted_arrival - resolved_ts (often ~0/negative)
   lead_to_departure_s INTEGER,          -- departure - resolved_ts
+  route_pattern_id    TEXT,             -- branch within a line
+  trip_name           TEXT,             -- train number
   PRIMARY KEY (trip_id, service_date)
 );
 CREATE INDEX IF NOT EXISTS idx_te_route ON track_events(route_id);
