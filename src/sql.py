@@ -1,6 +1,6 @@
 """SQL statements shared by the Collector DO (writes) and the entry Worker (reads)."""
 
-INSERT_POLL = "INSERT INTO polls (ts) VALUES (?)"
+INSERT_POLL = "INSERT INTO polls (ts) VALUES (?) RETURNING poll_id"
 
 INSERT_OBS = (
     "INSERT INTO observations ("

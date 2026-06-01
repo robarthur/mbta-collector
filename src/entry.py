@@ -9,7 +9,9 @@ mbta.py / sql.py / timeutil.py.
 """
 
 from workers import WorkerEntrypoint, Response, DurableObject
+from js import JSON
 from urllib.parse import urlparse
+import json
 
 import mbta
 import sql
@@ -29,6 +31,18 @@ def env_get(env, name):
         return None
     s = str(v)
     return s if s and s != "undefined" else None
+
+
+def _bound(db, query, params):
+    """Prepare + bind a D1 statement with correct NULL handling.
+
+    D1 rejects `undefined`, which is what any Python None -> JS conversion produces.
+    So we build the args as a real JS array via JSON.parse (Python None -> JSON null
+    -> JS null) and spread it through Function.apply, keeping nulls entirely in JS.
+    """
+    stmt = db.prepare(query)
+    js_args = JSON.parse(json.dumps(params))
+    return stmt.bind.apply(stmt, js_args)
 
 
 def _rows(res):
@@ -73,18 +87,18 @@ class Collector(DurableObject):
         ts = timeutil.now_iso()
         db = self.env.DB
 
-        res = await db.prepare(sql.INSERT_POLL).bind(ts).run()
-        poll_id = res.meta.last_row_id
+        res = await _bound(db, sql.INSERT_POLL, [ts]).all()
+        poll_id = _rows(res)[0]["poll_id"]
 
         if observations:
             obs_stmts = [
-                db.prepare(sql.INSERT_OBS).bind(
+                _bound(db, sql.INSERT_OBS, [
                     poll_id, o["trip_id"], o["vehicle_id"], o["route_id"],
                     o["direction_id"], o["current_status"], o["current_stop_sequence"],
                     o["vehicle_stop_id"], o["latitude"], o["longitude"], o["speed"],
                     o["bearing"], o["pred_stop_id"], o["arrival_time"],
                     o["departure_time"], o["status_text"],
-                )
+                ])
                 for o in observations
             ]
             await db.batch(obs_stmts)
@@ -97,12 +111,12 @@ class Collector(DurableObject):
             if not track:
                 continue
             event_stmts.append(
-                db.prepare(sql.INSERT_EVENT).bind(
+                _bound(db, sql.INSERT_EVENT, [
                     o["trip_id"], o["vehicle_id"], o["route_id"], service_date,
                     track, via, ts, o.get("arrival_time"), o.get("departure_time"),
                     timeutil.lead_seconds(o.get("arrival_time"), ts),
                     timeutil.lead_seconds(o.get("departure_time"), ts),
-                )
+                ])
             )
             event_count += 1
         if event_stmts:
@@ -167,7 +181,7 @@ class Default(WorkerEntrypoint):
         if not latest:
             return {"status": "no data yet"}
         poll = latest[0]
-        obs = _rows(await db.prepare(sql.OBS_FOR_POLL).bind(poll["poll_id"]).all())
+        obs = _rows(await _bound(db, sql.OBS_FOR_POLL, [poll["poll_id"]]).all())
 
         tracks = {str(i): None for i in range(1, 11)}
         for o in obs:
