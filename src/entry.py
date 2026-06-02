@@ -67,12 +67,21 @@ class Collector(DurableObject):
     async def arm(self):
         """Ensure the self-sustaining alarm loop is running.
 
-        getAlarm() returns JS null (falsy, not Python None) when no alarm is set, so test
-        truthiness rather than `is None`. A set alarm is a positive epoch-ms int (truthy).
+        Re-arm if there's no alarm OR the scheduled alarm is overdue (stuck / not firing).
+        A healthy loop's next alarm is always in the near future; an alarm whose time is
+        well in the past means the chain stalled, so reset it. getAlarm() returns JS null
+        (falsy) when unset.
         """
         current = await self.ctx.storage.getAlarm()
-        if not current:
-            self.ctx.storage.setAlarm(timeutil.now_ms() + POLL_INTERVAL_MS)
+        now = timeutil.now_ms()
+        overdue = False
+        if current:
+            try:
+                overdue = int(current) < now - 30_000
+            except Exception:
+                overdue = True
+        if (not current) or overdue:
+            self.ctx.storage.setAlarm(now + POLL_INTERVAL_MS)
             return "armed"
         return "already-armed"
 
@@ -169,8 +178,9 @@ class Default(WorkerEntrypoint):
         ns = self.env.COLLECTOR
         return ns.get(ns.idFromName(DO_NAME))
 
-    async def scheduled(self, controller):
-        # Cron backstop: keep the alarm loop alive if it ever stops.
+    async def scheduled(self, *args):
+        # Cron backstop (every 1 min): revive the alarm loop if it has stalled.
+        # Signature uses *args because the runtime passes (controller, env, ctx).
         await self._collector().arm()
 
     async def fetch(self, request):
