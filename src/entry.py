@@ -177,6 +177,29 @@ class Collector(DurableObject):
                 "occupancy": occupancy,
             }
 
+        # True arrival from VehiclePositions: this feed shows every train continuously, so it
+        # catches a trainset STOPPED_AT a platform during layover — before its outbound
+        # prediction exists. Record an 'arrive' milestone (the real berth time), keyed by the
+        # vehicle's current trip (the outbound service once the turn is assigned).
+        stop_to_station = {}
+        for skey, spec in mbta.STATIONS.items():
+            for sid, code in (await self._track_map(spec["station_id"], api_key)).items():
+                stop_to_station[sid] = (skey, code)
+        try:
+            for v in mbta.parse_vehicles(await mbta.fetch_vehicles(api_key)):
+                if v.get("current_status") != "STOPPED_AT" or not v.get("trip_id"):
+                    continue
+                hit = stop_to_station.get(v.get("stop_id"))
+                if not hit:
+                    continue
+                skey, track = hit
+                milestone_stmts.append(_bound(db, sql.INSERT_MILESTONE, [
+                    v["trip_id"], service_date, "arrive", ts, track, skey,
+                    v.get("route_id"), v.get("route_pattern_id"), v.get("trip_name"),
+                ]))
+        except Exception:
+            pass
+
         if obs_stmts:
             await db.batch(obs_stmts)
         if event_stmts:
@@ -236,8 +259,11 @@ class Default(WorkerEntrypoint):
 
         if path == "/turn-lead":
             return Response.json({
-                "by_station": _rows(await db.prepare(sql.TURN_LEAD).all()),
-                "recent": _rows(await db.prepare(sql.TURN_LEAD_RECENT).all()),
+                "arrive_vs_board": {  # true lead: trainset physically present vs board posting
+                    "by_station": _rows(await db.prepare(sql.TURN_LEAD_ARRIVE).all()),
+                    "recent": _rows(await db.prepare(sql.TURN_LEAD_ARRIVE_RECENT).all()),
+                },
+                "berth_vs_board_by_station": _rows(await db.prepare(sql.TURN_LEAD).all()),
             })
 
         if path == "/turn":

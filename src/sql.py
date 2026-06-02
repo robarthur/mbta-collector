@@ -91,11 +91,33 @@ TURN_LEAD_RECENT = (
     "USING (trip_id, service_date) ORDER BY bo.ts DESC LIMIT 25"
 )
 
-# Live: berthed trains whose board track hasn't posted yet (we know the platform; board doesn't).
+# True lead: trainset physically arrived (VehiclePositions) vs board posting the track.
+# lead_s > 0 => the trainset was on the platform before the board announced it.
+TURN_LEAD_ARRIVE = (
+    "SELECT a.station, COUNT(*) AS turns, "
+    "SUM(CASE WHEN a.ts < bo.ts THEN 1 ELSE 0 END) AS arrive_first, "
+    "SUM(CASE WHEN a.track = bo.track THEN 1 ELSE 0 END) AS track_match, "
+    "CAST(AVG((julianday(bo.ts)-julianday(a.ts))*86400) AS INT) AS avg_lead_s, "
+    "CAST(MAX((julianday(bo.ts)-julianday(a.ts))*86400) AS INT) AS max_lead_s "
+    "FROM (SELECT trip_id, service_date, station, ts, track FROM milestones WHERE kind='arrive') a "
+    "JOIN (SELECT trip_id, service_date, ts, track FROM milestones WHERE kind='board') bo "
+    "USING (trip_id, service_date) GROUP BY a.station ORDER BY a.station"
+)
+
+TURN_LEAD_ARRIVE_RECENT = (
+    "SELECT a.station, a.trip_name, a.route_id, a.track AS arrive_track, bo.track AS board_track, "
+    "CAST((julianday(bo.ts)-julianday(a.ts))*86400 AS INT) AS lead_s, a.ts AS arrive_ts, bo.ts AS board_ts "
+    "FROM (SELECT * FROM milestones WHERE kind='arrive') a "
+    "JOIN (SELECT trip_id, service_date, ts, track FROM milestones WHERE kind='board') bo "
+    "USING (trip_id, service_date) ORDER BY bo.ts DESC LIMIT 25"
+)
+
+# Live: trains physically on a platform now whose board track hasn't posted yet
+# (we know the platform from the trainset; the board doesn't yet).
 LIVE_TURN = (
-    "SELECT m.trip_name, m.route_id, m.route_pattern_id, m.track, m.ts AS berth_ts "
+    "SELECT m.trip_name, m.route_id, m.route_pattern_id, m.track, m.ts AS arrive_ts "
     "FROM milestones m "
-    "WHERE m.kind='berth' AND m.station=? AND m.service_date=? AND m.ts > ? "
+    "WHERE m.kind='arrive' AND m.station=? AND m.service_date=? AND m.ts > ? "
     "AND NOT EXISTS (SELECT 1 FROM milestones b WHERE b.trip_id=m.trip_id "
     "AND b.service_date=m.service_date AND b.kind='board') "
     "ORDER BY m.ts DESC"

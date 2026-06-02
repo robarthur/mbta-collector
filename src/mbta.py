@@ -77,6 +77,48 @@ def _rel_id(rel, name):
     return data.get("id")
 
 
+async def fetch_vehicles(api_key=None):
+    """All CR vehicles from VehiclePositions — seen continuously, even during layover when
+    a train has no active station prediction (which the predictions feed misses)."""
+    params = {"filter[route_type]": ROUTE_TYPE_CR, "include": "trip"}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{API_BASE}/vehicles", params=params, headers=_headers(api_key))
+        r.raise_for_status()
+        return r.json()
+
+
+def parse_vehicles(payload):
+    """Return list of {vehicle_id, current_status, stop_id, trip_id, trip_name,
+    route_id, route_pattern_id, direction_id}."""
+    trips = {}
+    for inc in payload.get("included") or []:
+        if inc.get("type") == "trip":
+            a = inc.get("attributes") or {}
+            rel = inc.get("relationships") or {}
+            trips[inc.get("id")] = {
+                "name": a.get("name"),
+                "route_pattern_id": _rel_id(rel, "route_pattern"),
+                "direction_id": a.get("direction_id"),
+            }
+    out = []
+    for v in payload.get("data") or []:
+        a = v.get("attributes") or {}
+        rel = v.get("relationships") or {}
+        tid = _rel_id(rel, "trip")
+        ti = trips.get(tid, {})
+        out.append({
+            "vehicle_id": v.get("id"),
+            "current_status": a.get("current_status"),
+            "stop_id": _rel_id(rel, "stop"),
+            "trip_id": tid,
+            "trip_name": ti.get("name"),
+            "route_pattern_id": ti.get("route_pattern_id"),
+            "route_id": _rel_id(rel, "route"),
+            "direction_id": ti.get("direction_id"),
+        })
+    return out
+
+
 def parse_payload(payload, track_map):
     """Return (observations, occupancy).
 
