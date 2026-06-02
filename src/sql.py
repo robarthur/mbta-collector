@@ -63,6 +63,44 @@ BRANCH_TRACK_DIST = (
     "ORDER BY station, route_pattern_id, n DESC"
 )
 
+INSERT_MILESTONE = (
+    "INSERT OR IGNORE INTO milestones ("
+    "trip_id, service_date, kind, ts, track, station, route_id, route_pattern_id, trip_name"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+# Per (trip, service_date): how much earlier the berth was known vs the board posting.
+# lead_s > 0 => the berthed trainset revealed the platform before the departure board.
+TURN_LEAD = (
+    "SELECT b.station, COUNT(*) AS turns, "
+    "SUM(CASE WHEN b.ts < bo.ts THEN 1 ELSE 0 END) AS berth_first, "
+    "SUM(CASE WHEN b.track = bo.track THEN 1 ELSE 0 END) AS track_match, "
+    "CAST(AVG((julianday(bo.ts)-julianday(b.ts))*86400) AS INT) AS avg_lead_s, "
+    "CAST(MAX((julianday(bo.ts)-julianday(b.ts))*86400) AS INT) AS max_lead_s "
+    "FROM (SELECT trip_id, service_date, station, ts, track FROM milestones WHERE kind='berth') b "
+    "JOIN (SELECT trip_id, service_date, ts, track FROM milestones WHERE kind='board') bo "
+    "USING (trip_id, service_date) GROUP BY b.station ORDER BY b.station"
+)
+
+TURN_LEAD_RECENT = (
+    "SELECT b.station, b.trip_name, b.route_id, b.route_pattern_id, "
+    "b.track AS berth_track, bo.track AS board_track, "
+    "CAST((julianday(bo.ts)-julianday(b.ts))*86400 AS INT) AS lead_s, b.ts AS berth_ts "
+    "FROM (SELECT * FROM milestones WHERE kind='berth') b "
+    "JOIN (SELECT trip_id, service_date, ts, track FROM milestones WHERE kind='board') bo "
+    "USING (trip_id, service_date) ORDER BY bo.ts DESC LIMIT 25"
+)
+
+# Live: berthed trains whose board track hasn't posted yet (we know the platform; board doesn't).
+LIVE_TURN = (
+    "SELECT m.trip_name, m.route_id, m.route_pattern_id, m.track, m.ts AS berth_ts "
+    "FROM milestones m "
+    "WHERE m.kind='berth' AND m.station=? AND m.service_date=? AND m.ts > ? "
+    "AND NOT EXISTS (SELECT 1 FROM milestones b WHERE b.trip_id=m.trip_id "
+    "AND b.service_date=m.service_date AND b.kind='board') "
+    "ORDER BY m.ts DESC"
+)
+
 RECENT_EVENTS = (
     "SELECT station, route_id, resolved_track, resolved_via, resolved_ts, "
     "lead_to_arrival_s, lead_to_departure_s "

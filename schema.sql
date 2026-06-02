@@ -53,3 +53,20 @@ CREATE TABLE IF NOT EXISTS track_events (
 );
 CREATE INDEX IF NOT EXISTS idx_te_route ON track_events(route_id);
 CREATE INDEX IF NOT EXISTS idx_te_station ON track_events(station);
+
+-- Two milestones per outbound service per day: 'berth' (trainset physically STOPPED_AT a
+-- platform — we know the platform from the trainset) and 'board' (departure prediction
+-- posts the track). board_ts - berth_ts = how much earlier the trainset told us vs the board.
+CREATE TABLE IF NOT EXISTS milestones (
+  trip_id          TEXT NOT NULL,
+  service_date     TEXT NOT NULL,
+  kind             TEXT NOT NULL,    -- berth | board
+  ts               TEXT NOT NULL,    -- first-seen ISO8601 UTC for this milestone
+  track            TEXT,
+  station          TEXT,
+  route_id         TEXT,
+  route_pattern_id TEXT,
+  trip_name        TEXT,
+  PRIMARY KEY (trip_id, service_date, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_ms_station ON milestones(station, service_date);

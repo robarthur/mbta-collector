@@ -81,7 +81,7 @@ class Collector(DurableObject):
             except Exception:
                 overdue = True
         if (not current) or overdue:
-            self.ctx.storage.setAlarm(now + POLL_INTERVAL_MS)
+            await self.ctx.storage.setAlarm(now + POLL_INTERVAL_MS)
             return "armed"
         return "already-armed"
 
@@ -90,7 +90,7 @@ class Collector(DurableObject):
             await self._poll()
         finally:
             # Always reschedule so a single failed poll never kills the loop.
-            self.ctx.storage.setAlarm(timeutil.now_ms() + POLL_INTERVAL_MS)
+            await self.ctx.storage.setAlarm(timeutil.now_ms() + POLL_INTERVAL_MS)
 
     async def poll_now(self):
         """Run one poll synchronously (used by /poll-once for fast feedback)."""
@@ -130,6 +130,7 @@ class Collector(DurableObject):
 
         obs_stmts = []
         event_stmts = []
+        milestone_stmts = []
         summary = {}
         for key, spec in mbta.STATIONS.items():
             track_map = await self._track_map(spec["station_id"], api_key)
@@ -147,6 +148,19 @@ class Collector(DurableObject):
                         o["departure_time"], o["status_text"],
                         o.get("route_pattern_id"), o.get("trip_name"),
                     ]))
+
+                # Milestones (every poll, 15s precision): record the first time we learn the
+                # track via the departure prediction (board) and via the berthed trainset (berth).
+                board_track = mbta.track_from_stop(o.get("pred_stop_id"), track_map)
+                berth_track = (mbta.track_from_stop(o.get("vehicle_stop_id"), track_map)
+                               if o.get("current_status") == "STOPPED_AT" else None)
+                for kind, mtrack in (("board", board_track), ("berth", berth_track)):
+                    if mtrack:
+                        milestone_stmts.append(_bound(db, sql.INSERT_MILESTONE, [
+                            o["trip_id"], service_date, kind, ts, mtrack, key,
+                            o["route_id"], o.get("route_pattern_id"), o.get("trip_name"),
+                        ]))
+
                 track, via = mbta.known_track(o, track_map)
                 if track:
                     event_stmts.append(_bound(db, sql.INSERT_EVENT, [
@@ -167,6 +181,8 @@ class Collector(DurableObject):
             await db.batch(obs_stmts)
         if event_stmts:
             await db.batch(event_stmts)
+        if milestone_stmts:
+            await db.batch(milestone_stmts)
         if do_snapshot:
             await self.ctx.storage.put("last_snapshot_ms", now)
 
@@ -218,6 +234,15 @@ class Default(WorkerEntrypoint):
         if path == "/events":
             return Response.json(_rows(await db.prepare(sql.RECENT_EVENTS).all()))
 
+        if path == "/turn-lead":
+            return Response.json({
+                "by_station": _rows(await db.prepare(sql.TURN_LEAD).all()),
+                "recent": _rows(await db.prepare(sql.TURN_LEAD_RECENT).all()),
+            })
+
+        if path == "/turn":
+            return Response.json(await self._turn(db, station))
+
         return Response("Not Found", status=404)
 
     async def _board(self, db, station):
@@ -267,6 +292,20 @@ class Default(WorkerEntrypoint):
             "poll": poll,
             "occupancy": tracks,
             "inbound": inbound,
+        }
+
+    async def _turn(self, db, station):
+        spec = mbta.STATIONS.get(station)
+        if spec is None:
+            return {"error": "unknown station", "valid": list(mbta.STATIONS.keys())}
+        sd = timeutil.service_date()
+        cutoff = timeutil.seconds_ago_iso(1800)  # only "currently" berthed (last 30 min)
+        rows = _rows(await _bound(db, sql.LIVE_TURN, [station, sd, cutoff]).all())
+        return {
+            "station": station,
+            "name": spec["name"],
+            "service_date": sd,
+            "berthed_board_not_posted": rows,
         }
 
     async def _analyze(self, db):

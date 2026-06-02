@@ -44,6 +44,10 @@ def service_date(dt_utc=None):
     return (e - timedelta(hours=SERVICE_DAY_ROLLOVER_HOURS)).date().isoformat()
 
 
+def seconds_ago_iso(seconds):
+    return (now_utc() - timedelta(seconds=seconds)).isoformat()
+
+
 def lead_seconds(target_iso, ref_iso):
     """Seconds from ref to target (both ISO8601, tz-aware). None if target missing/unparseable."""
     if not target_iso:

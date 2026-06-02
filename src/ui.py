@@ -71,6 +71,7 @@ PAGE = """<!doctype html>
   <a href="/board?station=north">/board</a> ·
   <a href="/analyze">/analyze</a> ·
   <a href="/events">/events</a> ·
+  <a href="/turn-lead">/turn-lead</a> ·
   <a href="/health">/health</a>. Auto-refreshes every 30s.
 </footer>
 <script>
