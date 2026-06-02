@@ -60,13 +60,31 @@ CREATE INDEX IF NOT EXISTS idx_te_station ON track_events(station);
 CREATE TABLE IF NOT EXISTS milestones (
   trip_id          TEXT NOT NULL,
   service_date     TEXT NOT NULL,
-  kind             TEXT NOT NULL,    -- berth | board
+  kind             TEXT NOT NULL,    -- berth | board | arrive
   ts               TEXT NOT NULL,    -- first-seen ISO8601 UTC for this milestone
   track            TEXT,
   station          TEXT,
   route_id         TEXT,
   route_pattern_id TEXT,
   trip_name        TEXT,
+  vehicle_id       TEXT,
   PRIMARY KEY (trip_id, service_date, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_ms_station ON milestones(station, service_date);
+
+-- True physical arrival, keyed by the trainset (vehicle), independent of which trip it is
+-- currently assigned to — so it captures the train arriving as its INBOUND service, before
+-- the turn flips it to the outbound trip. Keyed by track so yard-and-return uses the right
+-- arrival. Join to the 'board' milestone on (vehicle_id, service_date, track) for the true
+-- lead = board_ts - arrive_ts.
+CREATE TABLE IF NOT EXISTS vehicle_arrivals (
+  vehicle_id   TEXT NOT NULL,
+  service_date TEXT NOT NULL,
+  track        TEXT NOT NULL,
+  station      TEXT,
+  arrive_ts    TEXT NOT NULL,
+  trip_name    TEXT,
+  route_id     TEXT,
+  direction_id INTEGER,             -- direction the train was on when first stopped (1=inbound)
+  PRIMARY KEY (vehicle_id, service_date, track)
+);

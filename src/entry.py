@@ -159,6 +159,7 @@ class Collector(DurableObject):
                         milestone_stmts.append(_bound(db, sql.INSERT_MILESTONE, [
                             o["trip_id"], service_date, kind, ts, mtrack, key,
                             o["route_id"], o.get("route_pattern_id"), o.get("trip_name"),
+                            o.get("vehicle_id"),
                         ]))
 
                 track, via = mbta.known_track(o, track_map)
@@ -187,16 +188,26 @@ class Collector(DurableObject):
                 stop_to_station[sid] = (skey, code)
         try:
             for v in mbta.parse_vehicles(await mbta.fetch_vehicles(api_key)):
-                if v.get("current_status") != "STOPPED_AT" or not v.get("trip_id"):
+                if v.get("current_status") != "STOPPED_AT":
                     continue
                 hit = stop_to_station.get(v.get("stop_id"))
                 if not hit:
                     continue
                 skey, track = hit
-                milestone_stmts.append(_bound(db, sql.INSERT_MILESTONE, [
-                    v["trip_id"], service_date, "arrive", ts, track, skey,
-                    v.get("route_id"), v.get("route_pattern_id"), v.get("trip_name"),
-                ]))
+                # True physical arrival, keyed by trainset+track — captures the train even as
+                # its inbound service, before the turn flips it to the outbound trip.
+                if v.get("vehicle_id"):
+                    milestone_stmts.append(_bound(db, sql.INSERT_VEHICLE_ARRIVAL, [
+                        v["vehicle_id"], service_date, track, skey, ts,
+                        v.get("trip_name"), v.get("route_id"), v.get("direction_id"),
+                    ]))
+                # Also keep the trip-keyed 'arrive' milestone (fires once flipped to a trip).
+                if v.get("trip_id"):
+                    milestone_stmts.append(_bound(db, sql.INSERT_MILESTONE, [
+                        v["trip_id"], service_date, "arrive", ts, track, skey,
+                        v.get("route_id"), v.get("route_pattern_id"), v.get("trip_name"),
+                        v.get("vehicle_id"),
+                    ]))
         except Exception:
             pass
 
@@ -259,10 +270,11 @@ class Default(WorkerEntrypoint):
 
         if path == "/turn-lead":
             return Response.json({
-                "arrive_vs_board": {  # true lead: trainset physically present vs board posting
-                    "by_station": _rows(await db.prepare(sql.TURN_LEAD_ARRIVE).all()),
-                    "recent": _rows(await db.prepare(sql.TURN_LEAD_ARRIVE_RECENT).all()),
+                "true_lead": {  # physical arrival (by vehicle+track, pre-flip) vs board posting
+                    "by_station": _rows(await db.prepare(sql.TRUE_LEAD).all()),
+                    "recent": _rows(await db.prepare(sql.TRUE_LEAD_RECENT).all()),
                 },
+                "arrive_vs_board_by_station": _rows(await db.prepare(sql.TURN_LEAD_ARRIVE).all()),
                 "berth_vs_board_by_station": _rows(await db.prepare(sql.TURN_LEAD).all()),
             })
 

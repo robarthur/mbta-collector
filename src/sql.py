@@ -65,8 +65,40 @@ BRANCH_TRACK_DIST = (
 
 INSERT_MILESTONE = (
     "INSERT OR IGNORE INTO milestones ("
-    "trip_id, service_date, kind, ts, track, station, route_id, route_pattern_id, trip_name"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "trip_id, service_date, kind, ts, track, station, route_id, route_pattern_id, trip_name, vehicle_id"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+INSERT_VEHICLE_ARRIVAL = (
+    "INSERT OR IGNORE INTO vehicle_arrivals ("
+    "vehicle_id, service_date, track, station, arrive_ts, trip_name, route_id, direction_id"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+# TRUE lead: board posting vs the trainset's physical arrival at that track (any trip).
+# lead_s > 0 => the trainset was on the platform before the board posted the track.
+TRUE_LEAD = (
+    "SELECT bo.station, COUNT(*) AS turns, "
+    "SUM(CASE WHEN va.arrive_ts < bo.ts THEN 1 ELSE 0 END) AS arrive_first, "
+    "SUM(CASE WHEN va.direction_id = 1 THEN 1 ELSE 0 END) AS caught_inbound, "
+    "CAST(AVG((julianday(bo.ts)-julianday(va.arrive_ts))*86400) AS INT) AS avg_lead_s, "
+    "MAX(CAST((julianday(bo.ts)-julianday(va.arrive_ts))*86400 AS INT)) AS max_lead_s "
+    "FROM (SELECT vehicle_id, service_date, station, track, ts FROM milestones "
+    "WHERE kind='board' AND vehicle_id IS NOT NULL) bo "
+    "JOIN vehicle_arrivals va ON va.vehicle_id=bo.vehicle_id "
+    "AND va.service_date=bo.service_date AND va.track=bo.track "
+    "GROUP BY bo.station ORDER BY bo.station"
+)
+
+TRUE_LEAD_RECENT = (
+    "SELECT bo.station, bo.trip_name, bo.route_id, bo.track, va.direction_id AS arr_dir, "
+    "CAST((julianday(bo.ts)-julianday(va.arrive_ts))*86400 AS INT) AS lead_s, "
+    "va.arrive_ts, bo.ts AS board_ts "
+    "FROM (SELECT vehicle_id, service_date, station, track, ts, trip_name, route_id "
+    "FROM milestones WHERE kind='board' AND vehicle_id IS NOT NULL) bo "
+    "JOIN vehicle_arrivals va ON va.vehicle_id=bo.vehicle_id "
+    "AND va.service_date=bo.service_date AND va.track=bo.track "
+    "ORDER BY bo.ts DESC LIMIT 25"
 )
 
 # Per (trip, service_date): how much earlier the berth was known vs the board posting.
