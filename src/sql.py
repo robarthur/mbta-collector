@@ -188,6 +188,37 @@ TRAINS_LATEST_BY_ROUTE = (
     "AND route_id=? ORDER BY delay_s DESC"
 )
 
+# --- Delay history / performance (aggregates of train_status over time) ---
+# We reduce each trip to its LAST observed snapshot per day (closest to its destination)
+# via a window function, so a trip counts once rather than once per 2-min snapshot.
+# "On time" = final observed delay <= 5 min (300s), the MBTA CR convention.
+_LAST_DELAY_CTE = (
+    "WITH last AS (SELECT trip_id, service_date, route_id, delay_s, "
+    "ROW_NUMBER() OVER (PARTITION BY trip_id, service_date ORDER BY snapshot_ts DESC) rn "
+    "FROM train_status WHERE delay_s IS NOT NULL) "
+)
+
+HISTORY_BY_ROUTE = _LAST_DELAY_CTE + (
+    "SELECT route_id, COUNT(*) AS trips, ROUND(AVG(delay_s)/60.0,1) AS avg_delay_min, "
+    "ROUND(MAX(delay_s)/60.0,1) AS worst_min, "
+    "ROUND(100.0*SUM(CASE WHEN delay_s<=300 THEN 1 ELSE 0 END)/COUNT(*)) AS on_time_pct "
+    "FROM last WHERE rn=1 GROUP BY route_id ORDER BY avg_delay_min DESC"
+)
+
+HISTORY_BY_DAY = _LAST_DELAY_CTE + (
+    "SELECT service_date, route_id, COUNT(*) AS trips, "
+    "ROUND(AVG(delay_s)/60.0,1) AS avg_delay_min, "
+    "ROUND(100.0*SUM(CASE WHEN delay_s<=300 THEN 1 ELSE 0 END)/COUNT(*)) AS on_time_pct "
+    "FROM last WHERE rn=1 GROUP BY service_date, route_id ORDER BY service_date DESC, route_id"
+)
+
+# System-wide average delay by Eastern hour-of-day (UTC-4): when do delays build?
+HISTORY_BY_HOUR = (
+    "SELECT ((CAST(substr(snapshot_ts,12,2) AS INT)+20)%24) AS et_hour, "
+    "COUNT(*) AS samples, ROUND(AVG(delay_s)/60.0,1) AS avg_delay_min "
+    "FROM train_status WHERE delay_s IS NOT NULL GROUP BY et_hour ORDER BY et_hour"
+)
+
 RECENT_EVENTS = (
     "SELECT station, route_id, resolved_track, resolved_via, resolved_ts, "
     "lead_to_arrival_s, lead_to_departure_s "

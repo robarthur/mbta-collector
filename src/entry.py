@@ -312,6 +312,13 @@ class Default(WorkerEntrypoint):
                 rows = _rows(await db.prepare(sql.TRAINS_LATEST).all())
             return Response.json({"trains": rows})
 
+        if path == "/history":
+            return Response.json({
+                "by_route": _rows(await db.prepare(sql.HISTORY_BY_ROUTE).all()),
+                "by_day": _rows(await db.prepare(sql.HISTORY_BY_DAY).all()),
+                "by_hour_et": _rows(await db.prepare(sql.HISTORY_BY_HOUR).all()),
+            })
+
         return Response("Not Found", status=404)
 
     async def _board(self, db, station):
