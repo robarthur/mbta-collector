@@ -155,6 +155,39 @@ LIVE_TURN = (
     "ORDER BY m.ts DESC"
 )
 
+INSERT_TRAIN_STATUS = (
+    "INSERT OR IGNORE INTO train_status ("
+    "snapshot_ts, service_date, trip_id, trip_name, route_id, route_pattern_id, vehicle_id, "
+    "direction_id, next_stop_id, next_stop_seq, predicted_time, scheduled_time, delay_s, "
+    "current_status, latitude, longitude"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+
+# Per-line delay summary from the latest snapshot (on-time = within +-120s).
+DELAYS_BY_LINE = (
+    "SELECT route_id, COUNT(*) AS trains, "
+    "CAST(AVG(delay_s)/60.0 AS REAL) AS avg_delay_min, "
+    "CAST(MAX(delay_s)/60.0 AS REAL) AS max_delay_min, "
+    "ROUND(100.0*SUM(CASE WHEN ABS(delay_s)<=120 THEN 1 ELSE 0 END)/COUNT(*)) AS pct_on_time "
+    "FROM train_status WHERE snapshot_ts=(SELECT MAX(snapshot_ts) FROM train_status) "
+    "AND delay_s IS NOT NULL GROUP BY route_id ORDER BY avg_delay_min DESC"
+)
+
+# All trains in the latest snapshot (optionally one route): position + delay + status.
+TRAINS_LATEST = (
+    "SELECT route_id, route_pattern_id, trip_name, direction_id, next_stop_id, "
+    "delay_s, current_status, latitude, longitude, predicted_time "
+    "FROM train_status WHERE snapshot_ts=(SELECT MAX(snapshot_ts) FROM train_status) "
+    "ORDER BY route_id, delay_s DESC"
+)
+
+TRAINS_LATEST_BY_ROUTE = (
+    "SELECT route_id, route_pattern_id, trip_name, direction_id, next_stop_id, "
+    "delay_s, current_status, latitude, longitude, predicted_time "
+    "FROM train_status WHERE snapshot_ts=(SELECT MAX(snapshot_ts) FROM train_status) "
+    "AND route_id=? ORDER BY delay_s DESC"
+)
+
 RECENT_EVENTS = (
     "SELECT station, route_id, resolved_track, resolved_via, resolved_ts, "
     "lead_to_arrival_s, lead_to_departure_s "

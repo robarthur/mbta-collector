@@ -211,12 +211,30 @@ class Collector(DurableObject):
         except Exception:
             pass
 
+        # System-wide per-train delay snapshot (every ~2 min, on snapshot polls only).
+        status_stmts = []
+        if do_snapshot:
+            try:
+                for s in mbta.parse_system_predictions(await mbta.fetch_system_predictions(api_key)):
+                    delay_s = timeutil.lead_seconds(s.get("predicted_time"), s.get("scheduled_time"))
+                    status_stmts.append(_bound(db, sql.INSERT_TRAIN_STATUS, [
+                        ts, service_date, s["trip_id"], s.get("trip_name"), s.get("route_id"),
+                        s.get("route_pattern_id"), s.get("vehicle_id"), s.get("direction_id"),
+                        s.get("next_stop_id"), s.get("next_stop_seq"),
+                        s.get("predicted_time"), s.get("scheduled_time"), delay_s,
+                        s.get("current_status"), s.get("latitude"), s.get("longitude"),
+                    ]))
+            except Exception:
+                pass
+
         if obs_stmts:
             await db.batch(obs_stmts)
         if event_stmts:
             await db.batch(event_stmts)
         if milestone_stmts:
             await db.batch(milestone_stmts)
+        if status_stmts:
+            await db.batch(status_stmts)
         if do_snapshot:
             await self.ctx.storage.put("last_snapshot_ms", now)
 
@@ -280,6 +298,19 @@ class Default(WorkerEntrypoint):
 
         if path == "/turn":
             return Response.json(await self._turn(db, station))
+
+        if path == "/delays":
+            return Response.json({
+                "by_line": _rows(await db.prepare(sql.DELAYS_BY_LINE).all()),
+            })
+
+        if path == "/trains":
+            route = (query.get("route") or [None])[0]
+            if route:
+                rows = _rows(await _bound(db, sql.TRAINS_LATEST_BY_ROUTE, [route]).all())
+            else:
+                rows = _rows(await db.prepare(sql.TRAINS_LATEST).all())
+            return Response.json({"trains": rows})
 
         return Response("Not Found", status=404)
 
