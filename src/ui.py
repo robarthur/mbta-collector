@@ -218,12 +218,23 @@ async function loadBoard(){
         (who?`<div class="who">${shortLine(who.route)}<br>veh ${who.vehicle||""}</div>`:`<div class="who">free</div>`);
       grid.appendChild(cell); }
     if(!Object.keys(occ).length) grid.innerHTML='<div class="empty">No track data.</div>';
-    const inb=d.inbound||[];
-    let h="<table><thead><tr><th>Arrival</th><th>Route</th><th>Status</th><th>Track</th></tr></thead><tbody>";
-    for(const r of inb){ const pill=r.track_known?`<span class="pill" style="background:rgba(31,143,78,.2);color:#5fd896">Track ${r.track}</span>`:`<span class="pill" style="background:rgba(90,96,114,.25);color:#aab1bf">unknown</span>`;
-      h+=`<tr><td>${fmtTime(r.arrival_time)}</td><td>${shortLine(r.route)}</td><td>${r.status||"—"}</td><td>${pill}</td></tr>`; }
-    document.getElementById("pinbound").innerHTML = inb.length? h+"</tbody></table>" : '<div class="empty">No inbound trains.</div>';
   } catch(e){ document.getElementById("pgrid").innerHTML='<div class="empty err">Failed to load board.</div>'; }
+  // inbound + prediction from /predict
+  try {
+    const pr = await (await fetch("/predict?station="+currentStation)).json();
+    const inb = pr.inbound||[];
+    let h="<table><thead><tr><th>Arrival</th><th>Route</th><th>Status</th><th>Track</th><th>Predicted</th></tr></thead><tbody>";
+    for(const r of inb){
+      const trackCell = r.track_known
+        ? `<span class="pill" style="background:rgba(31,143,78,.2);color:#5fd896">Track ${r.actual_track}</span>`
+        : `<span class="pill" style="background:rgba(90,96,114,.25);color:#aab1bf">unknown</span>`;
+      let pred="—";
+      if(!r.track_known && r.prediction){ const p=r.prediction;
+        pred=`<b>Track ${p.predicted_track}</b> <span class="meta">${p.confidence}% · ${p.basis} (n=${p.n_samples})</span>`; }
+      h+=`<tr><td>${fmtTime(r.arrival_time)}</td><td>${shortLine(r.route)}</td><td>${r.status||"—"}</td><td>${trackCell}</td><td>${pred}</td></tr>`;
+    }
+    document.getElementById("pinbound").innerHTML = inb.length? h+"</tbody></table>" : '<div class="empty">No inbound trains.</div>';
+  } catch(e){ document.getElementById("pinbound").innerHTML='<div class="empty err">Failed to load predictions.</div>'; }
   try {
     const rows = await (await fetch("/events")).json();
     let h="<table><thead><tr><th>Resolved</th><th>Station</th><th>Route</th><th>Track</th><th>How</th></tr></thead><tbody>";

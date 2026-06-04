@@ -219,6 +219,18 @@ HISTORY_BY_HOUR = (
     "FROM train_status WHERE delay_s IS NOT NULL GROUP BY et_hour ORDER BY et_hour"
 )
 
+# Historical track priors for the predictor (per station): distribution of resolved tracks
+# by branch (route_pattern_id) and by line (route_id). Backoff branch -> line at lookup.
+PRIORS_BRANCH = (
+    "SELECT route_pattern_id, resolved_track, COUNT(*) AS n FROM track_events "
+    "WHERE station=? AND route_pattern_id IS NOT NULL AND resolved_track IS NOT NULL "
+    "GROUP BY route_pattern_id, resolved_track"
+)
+PRIORS_LINE = (
+    "SELECT route_id, resolved_track, COUNT(*) AS n FROM track_events "
+    "WHERE station=? AND resolved_track IS NOT NULL GROUP BY route_id, resolved_track"
+)
+
 RECENT_EVENTS = (
     "SELECT station, route_id, resolved_track, resolved_via, resolved_ts, "
     "lead_to_arrival_s, lead_to_departure_s "
