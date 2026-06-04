@@ -62,6 +62,20 @@ def _rows(res):
     return out
 
 
+CORS = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "*",
+}
+
+
+def _json(obj, max_age=15):
+    """JSON response with CORS (the app is served from a different origin / Pages) + cache."""
+    headers = {"content-type": "application/json; charset=UTF-8",
+               "cache-control": f"public, max-age={max_age}", **CORS}
+    return Response(json.dumps(obj), headers=headers)
+
+
 class Collector(DurableObject):
     # --- alarm lifecycle ---------------------------------------------------
     async def arm(self):
@@ -253,8 +267,14 @@ class Default(WorkerEntrypoint):
         await self._collector().arm()
 
     async def fetch(self, request):
+        if getattr(request, "method", "GET") == "OPTIONS":
+            return Response("", headers=CORS)
+
         parts = urlparse(request.url)
         path = parts.path
+        # Versioned API: /api/v1/<x> routes the same as /<x> (legacy paths kept as aliases).
+        if path.startswith("/api/v1"):
+            path = path[len("/api/v1"):] or "/"
         query = parse_qs(parts.query)
         station = (query.get("station") or ["north"])[0]
 
@@ -264,6 +284,7 @@ class Default(WorkerEntrypoint):
         except Exception:
             pass
 
+        # Legacy inline SPA (served during the React/Pages transition).
         if path in ("/", "", "/ui"):
             return Response(ui.PAGE, headers={"content-type": "text/html;charset=UTF-8"})
 
@@ -272,23 +293,23 @@ class Default(WorkerEntrypoint):
         if path == "/health":
             row = (_rows(await db.prepare(sql.HEALTH).all()) or [{}])[0]
             by_station = _rows(await db.prepare(sql.EVENTS_BY_STATION).all())
-            return Response.json({"status": "ok", "events_by_station": by_station, **row})
+            return _json({"status": "ok", "events_by_station": by_station, **row})
 
         if path == "/poll-once":
             result = await self._collector().poll_now()
-            return Response.json(result)
+            return _json(result)
 
         if path == "/board":
-            return Response.json(await self._board(db, station))
+            return _json(await self._board(db, station))
 
         if path == "/analyze":
-            return Response.json(await self._analyze(db))
+            return _json(await self._analyze(db))
 
         if path == "/events":
-            return Response.json(_rows(await db.prepare(sql.RECENT_EVENTS).all()))
+            return _json(_rows(await db.prepare(sql.RECENT_EVENTS).all()))
 
         if path == "/turn-lead":
-            return Response.json({
+            return _json({
                 "true_lead": {  # physical arrival (by vehicle+track, pre-flip) vs board posting
                     "by_station": _rows(await db.prepare(sql.TRUE_LEAD).all()),
                     "recent": _rows(await db.prepare(sql.TRUE_LEAD_RECENT).all()),
@@ -298,13 +319,13 @@ class Default(WorkerEntrypoint):
             })
 
         if path == "/turn":
-            return Response.json(await self._turn(db, station))
+            return _json(await self._turn(db, station))
 
         if path == "/predict":
-            return Response.json(await self._predict(db, station))
+            return _json(await self._predict(db, station))
 
         if path == "/delays":
-            return Response.json({
+            return _json({
                 "by_line": _rows(await db.prepare(sql.DELAYS_BY_LINE).all()),
             })
 
@@ -314,10 +335,10 @@ class Default(WorkerEntrypoint):
                 rows = _rows(await _bound(db, sql.TRAINS_LATEST_BY_ROUTE, [route]).all())
             else:
                 rows = _rows(await db.prepare(sql.TRAINS_LATEST).all())
-            return Response.json({"trains": rows})
+            return _json({"trains": rows})
 
         if path == "/history":
-            return Response.json({
+            return _json({
                 "by_route": _rows(await db.prepare(sql.HISTORY_BY_ROUTE).all()),
                 "by_day": _rows(await db.prepare(sql.HISTORY_BY_DAY).all()),
                 "by_hour_et": _rows(await db.prepare(sql.HISTORY_BY_HOUR).all()),
