@@ -337,6 +337,21 @@ class Default(WorkerEntrypoint):
                 rows = _rows(await db.prepare(sql.TRAINS_LATEST).all())
             return _json({"trains": rows})
 
+        if path == "/stops":
+            api_key = env_get(self.env, "MBTA_API_KEY")
+            stops = mbta.parse_cr_stops(await mbta.fetch_cr_stops(api_key))
+            return _json({"stops": stops}, max_age=3600)
+
+        if path == "/station":
+            stop = (query.get("stop") or [None])[0]
+            if not stop:
+                return _json({"error": "stop required"})
+            api_key = env_get(self.env, "MBTA_API_KEY")
+            board = mbta.parse_station_board(await mbta.fetch_station_predictions(stop, api_key))
+            for d in board:
+                d["delay_s"] = timeutil.lead_seconds(d.get("predicted_time"), d.get("scheduled_time"))
+            return _json({"stop": stop, "departures": board[:20]}, max_age=20)
+
         if path == "/history":
             return _json({
                 "by_route": _rows(await db.prepare(sql.HISTORY_BY_ROUTE).all()),

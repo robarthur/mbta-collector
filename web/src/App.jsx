@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Routes, Route, Navigate } from 'react-router-dom'
 import { api, fmtTime } from './api'
 import MapView from './views/MapView.jsx'
+import StationsView from './views/StationsView.jsx'
 import LinesView from './views/LinesView.jsx'
 import PlatformsView from './views/PlatformsView.jsx'
 
@@ -25,6 +26,7 @@ export default function App() {
         </span>
         <nav>
           <NavLink to="/map">Map</NavLink>
+          <NavLink to="/stations">Stations</NavLink>
           <NavLink to="/lines">Lines</NavLink>
           <NavLink to="/platforms">Platforms</NavLink>
         </nav>
@@ -32,6 +34,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/map" replace />} />
         <Route path="/map" element={<MapView />} />
+        <Route path="/stations" element={<StationsView />} />
         <Route path="/lines" element={<LinesView />} />
         <Route path="/platforms" element={<PlatformsView />} />
         <Route path="*" element={<Navigate to="/map" replace />} />

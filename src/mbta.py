@@ -264,6 +264,75 @@ def parse_system_predictions(payload):
     return list(best.values())
 
 
+async def fetch_cr_stops(api_key=None):
+    """All CR stops + their parent stations (for the station picker)."""
+    params = {"filter[route_type]": ROUTE_TYPE_CR, "page[limit]": "500",
+              "include": "parent_station", "fields[stop]": "name"}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{API_BASE}/stops", params=params, headers=_headers(api_key))
+        r.raise_for_status()
+        return r.json()
+
+
+def parse_cr_stops(payload):
+    # Collapse boarding stops to their parent station (the id that filter[stop] wants).
+    inc = {i.get("id"): (i.get("attributes") or {}).get("name")
+           for i in payload.get("included") or [] if i.get("type") == "stop"}
+    stations = {}
+    for s in payload.get("data") or []:
+        pid = _rel_id(s.get("relationships") or {}, "parent_station")
+        if pid:
+            stations[pid] = inc.get(pid)
+        else:
+            stations[s.get("id")] = (s.get("attributes") or {}).get("name")
+    out = [{"id": k, "name": v} for k, v in stations.items() if v]
+    out.sort(key=lambda x: x["name"])
+    return out
+
+
+async def fetch_station_predictions(stop, api_key=None):
+    """Upcoming CR predictions at a stop, with scheduled times + trip (destination) + route."""
+    params = {"filter[stop]": stop, "filter[route_type]": ROUTE_TYPE_CR,
+              "include": "schedule,trip,route", "sort": "departure_time"}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{API_BASE}/predictions", params=params, headers=_headers(api_key))
+        r.raise_for_status()
+        return r.json()
+
+
+def parse_station_board(payload):
+    """Upcoming departures at a station: scheduled vs predicted, destination, status."""
+    included = payload.get("included") or []
+    schedules, trips = {}, {}
+    for inc in included:
+        a = inc.get("attributes") or {}
+        if inc.get("type") == "schedule":
+            schedules[inc.get("id")] = {"arrival_time": a.get("arrival_time"),
+                                        "departure_time": a.get("departure_time")}
+        elif inc.get("type") == "trip":
+            trips[inc.get("id")] = {"name": a.get("name"), "headsign": a.get("headsign"),
+                                    "direction_id": a.get("direction_id")}
+    out = []
+    for p in payload.get("data") or []:
+        a = p.get("attributes") or {}
+        rel = p.get("relationships") or {}
+        sched = schedules.get(_rel_id(rel, "schedule"), {})
+        if a.get("departure_time"):
+            pred_t, sched_t = a.get("departure_time"), sched.get("departure_time")
+        else:
+            pred_t, sched_t = a.get("arrival_time"), sched.get("arrival_time")
+        if not pred_t:
+            continue  # already departed / no upcoming time
+        ti = trips.get(_rel_id(rel, "trip"), {})
+        out.append({
+            "trip_name": ti.get("name"), "headsign": ti.get("headsign"),
+            "direction_id": ti.get("direction_id"), "route_id": _rel_id(rel, "route"),
+            "scheduled_time": sched_t, "predicted_time": pred_t, "status": a.get("status"),
+        })
+    out.sort(key=lambda d: d["predicted_time"])
+    return out
+
+
 def known_track(obs, track_map):
     """(track, via) for an observation, or (None, None) if the track isn't knowable yet.
 
