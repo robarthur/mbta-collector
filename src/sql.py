@@ -159,8 +159,8 @@ INSERT_TRAIN_STATUS = (
     "INSERT OR IGNORE INTO train_status ("
     "snapshot_ts, service_date, trip_id, trip_name, route_id, route_pattern_id, vehicle_id, "
     "direction_id, next_stop_id, next_stop_seq, predicted_time, scheduled_time, delay_s, "
-    "current_status, latitude, longitude"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "current_status, reported_status, latitude, longitude"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 # Per-line delay summary from the latest snapshot (on-time = within +-120s).
@@ -176,14 +176,14 @@ DELAYS_BY_LINE = (
 # All trains in the latest snapshot (optionally one route): position + delay + status.
 TRAINS_LATEST = (
     "SELECT route_id, route_pattern_id, trip_name, direction_id, next_stop_id, "
-    "delay_s, current_status, latitude, longitude, predicted_time "
+    "delay_s, current_status, reported_status, latitude, longitude, predicted_time "
     "FROM train_status WHERE snapshot_ts=(SELECT MAX(snapshot_ts) FROM train_status) "
     "ORDER BY route_id, delay_s DESC"
 )
 
 TRAINS_LATEST_BY_ROUTE = (
     "SELECT route_id, route_pattern_id, trip_name, direction_id, next_stop_id, "
-    "delay_s, current_status, latitude, longitude, predicted_time "
+    "delay_s, current_status, reported_status, latitude, longitude, predicted_time "
     "FROM train_status WHERE snapshot_ts=(SELECT MAX(snapshot_ts) FROM train_status) "
     "AND route_id=? ORDER BY delay_s DESC"
 )

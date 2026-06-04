@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS train_status (
   scheduled_time   TEXT,
   delay_s          INTEGER,
   current_status   TEXT,
+  reported_status  TEXT,             -- feed's own status text ("Delayed"/"On time"/…)
   latitude         REAL,
   longitude        REAL,
   PRIMARY KEY (trip_id, snapshot_ts)

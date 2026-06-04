@@ -257,6 +257,7 @@ def parse_system_predictions(payload):
             "predicted_time": pred_t,
             "scheduled_time": sched_t,
             "current_status": v.get("current_status"),
+            "reported_status": a.get("status"),   # feed's words: "Delayed"/"On time"/...
             "latitude": v.get("latitude"),
             "longitude": v.get("longitude"),
         }

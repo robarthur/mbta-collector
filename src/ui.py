@@ -31,7 +31,8 @@ PAGE = """<!doctype html>
   #map { height:calc(100vh - 150px); border-radius:10px; border:1px solid var(--line); }
   .chips { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
   .chip { padding:4px 10px; border-radius:999px; border:1px solid var(--line);
-          background:var(--panel); cursor:pointer; font-size:12.5px; display:flex; gap:6px; align-items:center; }
+          background:var(--panel); color:var(--text); cursor:pointer; font-size:12.5px;
+          display:flex; gap:6px; align-items:center; white-space:nowrap; }
   .chip.active { outline:2px solid var(--cr); }
   .dotc { width:9px; height:9px; border-radius:50%; display:inline-block; }
   .legend { color:var(--muted); font-size:12px; margin:8px 0 0; display:flex; gap:14px; flex-wrap:wrap; }
@@ -161,7 +162,9 @@ async function loadTrains(){
       if(t.latitude==null||t.longitude==null) continue; n++;
       const col=delayColor(t.delay_s);
       L.circleMarker([t.latitude,t.longitude],{radius:6,color:col,fillColor:col,fillOpacity:.9,weight:1})
-        .bindPopup(`<b>${shortLine(t.route_id)} ${t.trip_name||""}</b><br>delay ${fmtDelay(t.delay_s)}<br>${t.current_status||""}<br>→ ${t.next_stop_id||"?"}`)
+        .bindPopup(`<b>${shortLine(t.route_id)} ${t.trip_name||""}</b><br>`+
+          `Est delay: <b style="color:${col}">${fmtDelay(t.delay_s)}</b><br>`+
+          `Reported: ${t.reported_status||"—"}<br>${t.current_status||""}<br>→ ${t.next_stop_id||"?"}`)
         .addTo(markers);
     }
     document.getElementById("mapcount").textContent = n+" trains shown";

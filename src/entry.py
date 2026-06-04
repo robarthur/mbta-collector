@@ -222,7 +222,8 @@ class Collector(DurableObject):
                         s.get("route_pattern_id"), s.get("vehicle_id"), s.get("direction_id"),
                         s.get("next_stop_id"), s.get("next_stop_seq"),
                         s.get("predicted_time"), s.get("scheduled_time"), delay_s,
-                        s.get("current_status"), s.get("latitude"), s.get("longitude"),
+                        s.get("current_status"), s.get("reported_status"),
+                        s.get("latitude"), s.get("longitude"),
                     ]))
             except Exception:
                 pass
