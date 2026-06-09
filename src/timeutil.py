@@ -39,6 +39,11 @@ def eastern_now(dt_utc=None):
     return dt_utc + timedelta(hours=offset)
 
 
+def eastern_hhmm(dt_utc=None):
+    """Current Eastern wall-clock time as 'HH:MM' (for MBTA filter[min_time])."""
+    return eastern_now(dt_utc).strftime("%H:%M")
+
+
 def service_date(dt_utc=None):
     e = eastern_now(dt_utc)
     return (e - timedelta(hours=SERVICE_DAY_ROLLOVER_HOURS)).date().isoformat()

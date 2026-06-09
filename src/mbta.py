@@ -332,6 +332,7 @@ def parse_station_board(payload):
             continue
         ti = trips.get(_rel_id(rel, "trip"), {})
         out.append({
+            "trip_id": _rel_id(rel, "trip"),
             "trip_name": ti.get("name"), "headsign": ti.get("headsign"),
             "direction_id": ti.get("direction_id"), "route_id": _rel_id(rel, "route"),
             "route_pattern_id": ti.get("route_pattern_id"),
@@ -339,6 +340,49 @@ def parse_station_board(payload):
             "confirmed_track": stop_platform.get(_rel_id(rel, "stop")),
         })
     out.sort(key=lambda d: d["predicted_time"])
+    return out
+
+
+async def fetch_station_schedules(stop, api_key=None, min_time=None, limit=12):
+    """Next scheduled CR departures (direction 0) at a stop -- the booked timetable, so the
+    departures board stays populated even when no live prediction has posted yet."""
+    params = {"filter[stop]": stop, "filter[route_type]": ROUTE_TYPE_CR,
+              "filter[direction_id]": "0", "sort": "departure_time",
+              "page[limit]": str(limit), "include": "trip,route"}
+    if min_time:
+        params["filter[min_time]"] = min_time
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{API_BASE}/schedules", params=params, headers=_headers(api_key))
+        r.raise_for_status()
+        return r.json()
+
+
+def parse_station_schedules(payload):
+    """Scheduled departures: trip_id, train number, destination, route, route_pattern, time."""
+    trips = {}
+    for inc in payload.get("included") or []:
+        if inc.get("type") == "trip":
+            a = inc.get("attributes") or {}
+            rel = inc.get("relationships") or {}
+            trips[inc.get("id")] = {"name": a.get("name"), "headsign": a.get("headsign"),
+                                    "direction_id": a.get("direction_id"),
+                                    "route_pattern_id": _rel_id(rel, "route_pattern")}
+    out = []
+    for s in payload.get("data") or []:
+        a = s.get("attributes") or {}
+        rel = s.get("relationships") or {}
+        dep = a.get("departure_time")
+        if not dep:
+            continue  # arrival-only stop time (e.g. a terminus arrival) -- not a departure
+        tid = _rel_id(rel, "trip")
+        ti = trips.get(tid, {})
+        out.append({
+            "trip_id": tid, "trip_name": ti.get("name"), "headsign": ti.get("headsign"),
+            "direction_id": 0, "route_id": _rel_id(rel, "route"),
+            "route_pattern_id": ti.get("route_pattern_id"),
+            "scheduled_time": dep, "predicted_time": None, "status": None,
+            "confirmed_track": None,
+        })
     return out
 
 

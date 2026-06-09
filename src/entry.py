@@ -23,6 +23,7 @@ import ui
 
 POLL_INTERVAL_MS = 15_000        # how often we poll MBTA + detect track resolutions
 SNAPSHOT_INTERVAL_MS = 120_000   # how often we persist a full observations snapshot
+DEPARTURE_BOARD_N = 12           # how many upcoming departures the station board shows
 DO_NAME = "collector"
 
 
@@ -365,15 +366,38 @@ class Default(WorkerEntrypoint):
                 return _json({"error": "stop required"})
             api_key = env_get(self.env, "MBTA_API_KEY")
             board = mbta.parse_station_board(await mbta.fetch_station_predictions(stop, api_key))
+            preds = {r["trip_id"]: r for r in board if r.get("trip_id")}
+
+            # Arrivals: live predictions only (inbound trains are predicted well ahead).
+            arrivals = [r for r in board if r.get("direction_id") == 1]
+
+            # Departures: the booked timetable (next N) as the spine, with each row enriched
+            # by its live prediction (time/status/confirmed platform) when one has posted.
+            # MBTA only predicts a departure once a set is assigned, so the schedule keeps the
+            # board populated in the gaps; the union also picks up late trains still predicting.
+            sched = mbta.parse_station_schedules(
+                await mbta.fetch_station_schedules(stop, api_key, timeutil.eastern_hhmm(), DEPARTURE_BOARD_N))
+            departures, seen = [], set()
+            for s in sched:
+                p = preds.get(s["trip_id"])
+                departures.append({**s, **{k: p[k] for k in
+                                  ("predicted_time", "status", "confirmed_track")} } if p else s)
+                seen.add(s["trip_id"])
+            for r in board:  # live departure predictions not in the upcoming schedule (e.g. late)
+                if r.get("direction_id") == 0 and r.get("trip_id") not in seen:
+                    departures.append(r)
+            departures.sort(key=lambda d: d.get("predicted_time") or d.get("scheduled_time") or "")
+            departures = departures[:DEPARTURE_BOARD_N]
+
             # Per-train platform prediction for the stations we track history at.
             key = next((k for k, s in mbta.STATIONS.items() if s["station_id"] == stop), None)
             priors = await self._load_priors(db, key) if key else None
-            for d in board:
+            for d in departures + arrivals:
                 d["delay_s"] = timeutil.lead_seconds(d.get("predicted_time"), d.get("scheduled_time"))
                 d["prediction"] = (_predict_from(*priors, d.get("trip_name"),
                                                  d.get("route_pattern_id"), d.get("route_id"))
                                    if priors else None)
-            return _json({"stop": stop, "trains": board[:40]}, max_age=20)
+            return _json({"stop": stop, "departures": departures, "arrivals": arrivals[:40]}, max_age=20)
 
         if path == "/history":
             return _json({

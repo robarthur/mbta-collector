@@ -30,15 +30,17 @@ function Board({ title, rows, loading }) {
           <thead><tr><th>Time</th><th>Destination</th><th>Line</th><th>Platform</th><th>Status</th></tr></thead>
           <tbody>{rows.map((r, i) => (
             <tr key={i}>
-              <td>{fmtTime(r.predicted_time)}{' '}
-                {r.scheduled_time && r.scheduled_time !== r.predicted_time &&
+              <td>{fmtTime(r.predicted_time || r.scheduled_time)}{' '}
+                {r.predicted_time && r.scheduled_time && r.scheduled_time !== r.predicted_time &&
                   <span className="meta">(was {fmtTime(r.scheduled_time)})</span>}
               </td>
               <td>{r.headsign}{r.trip_name ? ' · ' + r.trip_name : ''}</td>
               <td><span className="dotc" style={{ background: LINE_COLORS[r.route_id] || '#888' }} /> {shortLine(r.route_id)}</td>
               <td><Platform row={r} /></td>
-              <td style={{ color: delayColor(r.delay_s) }}>
-                {r.delay_s != null && Math.abs(r.delay_s) > 60 ? fmtDelay(r.delay_s) : (r.status || 'On time')}
+              <td style={{ color: r.predicted_time ? delayColor(r.delay_s) : 'var(--muted)' }}>
+                {r.delay_s != null && Math.abs(r.delay_s) > 60
+                  ? fmtDelay(r.delay_s)
+                  : r.predicted_time ? (r.status || 'On time') : 'Scheduled'}
               </td>
             </tr>
           ))}</tbody>
@@ -51,7 +53,7 @@ function Board({ title, rows, loading }) {
 export default function StationsView() {
   const [stops, setStops] = useState([])
   const [stop, setStop] = useState('place-north')
-  const [trains, setTrains] = useState([])
+  const [board, setBoard] = useState({})
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
 
@@ -60,12 +62,12 @@ export default function StationsView() {
   useEffect(() => {
     if (!stop) return
     let active = true
-    setTrains([]); setLoading(true)  // clear immediately so the station change is visible
+    setBoard({}); setLoading(true)  // clear immediately so the station change is visible
     const load = async (showLoading) => {
       if (showLoading) setLoading(true)
       try {
         const d = await api('/station?stop=' + encodeURIComponent(stop))
-        if (active) { setTrains(d.trains || []); setErr(null) }
+        if (active) { setBoard(d); setErr(null) }
       } catch { if (active) setErr('failed to load board') }
       finally { if (active) setLoading(false) }
     }
@@ -76,8 +78,8 @@ export default function StationsView() {
 
   const stationName = stops.find((s) => s.id === stop)?.name
 
-  const departures = trains.filter((t) => t.direction_id === 0)
-  const arrivals = trains.filter((t) => t.direction_id === 1)
+  const departures = board.departures || []
+  const arrivals = board.arrivals || []
 
   return (
     <div className="wrap">
