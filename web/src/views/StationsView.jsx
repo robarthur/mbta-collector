@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api, LINE_COLORS, shortLine, delayColor, fmtDelay, fmtTime } from '../api'
 
 // RTT-style platform: green + bold when confirmed by the board; grey (with confidence + n)
@@ -67,7 +68,9 @@ function Board({ title, rows, loading }) {
 
 export default function StationsView() {
   const [stops, setStops] = useState([])
-  const [stop, setStop] = useState('place-north')
+  const [params, setParams] = useSearchParams()
+  const stop = params.get('stop') || 'place-north'
+  const setStop = (s) => setParams({ stop: s }, { replace: true })  // shareable URL, no history spam
   const [board, setBoard] = useState({})
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
