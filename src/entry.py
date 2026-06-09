@@ -77,14 +77,40 @@ def _json(obj, max_age=15):
     return Response(json.dumps(obj), headers=headers)
 
 
+PREDICT_SINGLE_MIN = 60     # at/above this modal confidence we show a single platform
+PREDICT_RANGE_COVERAGE = 80  # else widen to the platforms covering this cumulative share
+
+
+def _track_key(t):
+    return (int(t) if t.isdigit() else 9999, t)
+
+
 def _predict_from(train, branch, line, tn, rp, rid):
-    """Predicted track from historical priors, backoff: train# -> branch -> line."""
+    """Predicted track from historical priors, backoff: train# -> branch -> line.
+
+    Returns the modal track + confidence, and -- when the modal confidence is below
+    PREDICT_SINGLE_MIN -- a contiguous platform `range` spanning the most-likely tracks that
+    together cover ~PREDICT_RANGE_COVERAGE% of history (so a low-confidence single guess is
+    presented honestly as e.g. "Plat 1-5 ~78%").
+    """
     def _from(dist, basis):
         total = sum(dist.values())
         ranked = sorted(dist.items(), key=lambda kv: -kv[1])
-        return {"predicted_track": ranked[0][0], "confidence": round(100 * ranked[0][1] / total),
-                "alternatives": [{"track": t, "pct": round(100 * n / total)} for t, n in ranked[:3]],
-                "basis": basis, "n_samples": total}
+        modal_pct = 100 * ranked[0][1] / total
+        out = {"predicted_track": ranked[0][0], "confidence": round(modal_pct),
+               "alternatives": [{"track": t, "pct": round(100 * n / total)} for t, n in ranked[:5]],
+               "basis": basis, "n_samples": total}
+        if modal_pct < PREDICT_SINGLE_MIN:
+            chosen, acc = [], 0
+            for t, n in ranked:
+                chosen.append(t)
+                acc += n
+                if 100 * acc / total >= PREDICT_RANGE_COVERAGE:
+                    break
+            nums = sorted(chosen, key=_track_key)
+            out["range"] = {"low": nums[0], "high": nums[-1], "tracks": chosen,
+                            "confidence": round(100 * acc / total)}
+        return out
     if tn and train.get(tn) and sum(train[tn].values()) >= 3:
         return _from(train[tn], "train")
     if rp and branch.get(rp) and sum(branch[rp].values()) >= 5:

@@ -9,6 +9,15 @@ function Platform({ row }) {
   }
   if (row.prediction) {
     const p = row.prediction
+    // Low modal confidence -> show the contiguous platform range that covers most history.
+    if (p.range && p.range.low !== p.range.high) {
+      return (
+        <span style={{ color: 'var(--muted)' }} title={'Likely tracks: ' + p.range.tracks.join(', ')}>
+          Plat {p.range.low}–{p.range.high}{' '}
+          <span className="meta">~{p.range.confidence}% · n={p.n_samples}</span>
+        </span>
+      )
+    }
     return (
       <span style={{ color: 'var(--muted)' }}>
         Plat {p.predicted_track}{' '}
