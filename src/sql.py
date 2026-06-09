@@ -221,6 +221,11 @@ HISTORY_BY_HOUR = (
 
 # Historical track priors for the predictor (per station): distribution of resolved tracks
 # by branch (route_pattern_id) and by line (route_id). Backoff branch -> line at lookup.
+PRIORS_TRAIN = (
+    "SELECT trip_name, resolved_track, COUNT(*) AS n FROM track_events "
+    "WHERE station=? AND trip_name IS NOT NULL AND resolved_track IS NOT NULL "
+    "GROUP BY trip_name, resolved_track"
+)
 PRIORS_BRANCH = (
     "SELECT route_pattern_id, resolved_track, COUNT(*) AS n FROM track_events "
     "WHERE station=? AND route_pattern_id IS NOT NULL AND resolved_track IS NOT NULL "

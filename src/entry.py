@@ -431,21 +431,16 @@ class Default(WorkerEntrypoint):
         api_key = env_get(self.env, "MBTA_API_KEY")
         track_map = await mbta.fetch_track_map(spec["station_id"], api_key)
 
-        # Build priors from history: branch (route_pattern_id) and line (route_id).
-        branch, line = {}, {}
+        # Priors from history: per-train (trip_name), branch (route_pattern_id), line (route_id).
+        train, branch, line = {}, {}, {}
+        for r in _rows(await _bound(db, sql.PRIORS_TRAIN, [station]).all()):
+            train.setdefault(r.get("trip_name"), {})[str(r.get("resolved_track"))] = r.get("n")
         for r in _rows(await _bound(db, sql.PRIORS_BRANCH, [station]).all()):
             branch.setdefault(r.get("route_pattern_id"), {})[str(r.get("resolved_track"))] = r.get("n")
         for r in _rows(await _bound(db, sql.PRIORS_LINE, [station]).all()):
             line.setdefault(r.get("route_id"), {})[str(r.get("resolved_track"))] = r.get("n")
 
-        def predict(rp, rid):
-            dist, basis = None, None
-            if rp and branch.get(rp) and sum(branch[rp].values()) >= 5:
-                dist, basis = branch[rp], "branch"
-            elif rid and line.get(rid):
-                dist, basis = line[rid], "line"
-            if not dist:
-                return None
+        def _from(dist, basis):
             total = sum(dist.values())
             ranked = sorted(dist.items(), key=lambda kv: -kv[1])
             return {
@@ -455,23 +450,34 @@ class Default(WorkerEntrypoint):
                 "basis": basis, "n_samples": total,
             }
 
-        inbound = []
+        def predict(tn, rp, rid):
+            # Backoff: train number (best — works for departures) -> branch -> line.
+            if tn and train.get(tn) and sum(train[tn].values()) >= 3:
+                return _from(train[tn], "train")
+            if rp and branch.get(rp) and sum(branch[rp].values()) >= 5:
+                return _from(branch[rp], "branch")
+            if rid and line.get(rid):
+                return _from(line[rid], "line")
+            return None
+
+        trains = []
         latest = _rows(await db.prepare(sql.LATEST_POLL).all())
         if latest:
             obs = _rows(await _bound(db, sql.OBS_FOR_POLL, [latest[0]["poll_id"], station]).all())
             for o in obs:
-                if not o.get("arrival_time"):
+                if not (o.get("arrival_time") or o.get("departure_time")):
                     continue
                 track, via = mbta.known_track(o, track_map)
-                p = predict(o.get("route_pattern_id"), o.get("route_id"))
-                inbound.append({
+                trains.append({
                     "trip_name": o.get("trip_name"), "route": o.get("route_id"),
-                    "branch": o.get("route_pattern_id"), "arrival_time": o.get("arrival_time"),
+                    "branch": o.get("route_pattern_id"), "direction_id": o.get("direction_id"),
+                    "arrival_time": o.get("arrival_time"), "departure_time": o.get("departure_time"),
                     "status": o.get("current_status"),
                     "actual_track": track, "track_known": track is not None,
-                    "prediction": p,
+                    "prediction": predict(o.get("trip_name"), o.get("route_pattern_id"), o.get("route_id")),
                 })
-        return {"station": station, "name": spec["name"], "inbound": inbound}
+        # "inbound" kept as an alias for backward-compat with the current UI.
+        return {"station": station, "name": spec["name"], "trains": trains, "inbound": trains}
 
     async def _analyze(self, db):
         return {

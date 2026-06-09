@@ -53,12 +53,15 @@ export default function PlatformsView() {
         })}</div>
       ) : <div className="empty">No track data.</div>}
 
-      <h2>Inbound trains</h2>
-      {(predict.inbound || []).length ? (
-        <table><thead><tr><th>Arrival</th><th>Route</th><th>Status</th><th>Track</th><th>Predicted</th></tr></thead>
-          <tbody>{predict.inbound.map((r, i) => (
+      <h2>Upcoming trains &amp; predicted platform</h2>
+      {(predict.trains || []).length ? (
+        <table><thead><tr><th>Time</th><th>Dir</th><th>Route</th><th>Status</th><th>Track</th><th>Predicted</th></tr></thead>
+          <tbody>{predict.trains.map((r, i) => (
             <tr key={i}>
-              <td>{fmtTime(r.arrival_time)}</td><td>{shortLine(r.route)}</td><td>{r.status || '—'}</td>
+              <td>{fmtTime(r.departure_time || r.arrival_time)}</td>
+              <td className="meta">{r.direction_id === 1 ? 'arr' : 'dep'}</td>
+              <td>{shortLine(r.route)}{r.trip_name ? ' ' + r.trip_name : ''}</td>
+              <td>{r.status || '—'}</td>
               <td>{r.track_known
                 ? <span className="pill" style={{ background: 'rgba(31,143,78,.2)', color: '#5fd896' }}>Track {r.actual_track}</span>
                 : <span className="pill" style={{ background: 'rgba(90,96,114,.25)', color: '#aab1bf' }}>unknown</span>}</td>
@@ -67,7 +70,7 @@ export default function PlatformsView() {
                 : '—'}</td>
             </tr>
           ))}</tbody></table>
-      ) : <div className="empty">No inbound trains.</div>}
+      ) : <div className="empty">No upcoming trains.</div>}
 
       <h2>Recent platform resolutions (all stations)</h2>
       {events.length ? (
