@@ -11,10 +11,16 @@ function Platform({ row }) {
     const p = row.prediction
     // Low modal confidence -> show the contiguous platform range that covers most history.
     if (p.range && p.range.low !== p.range.high) {
+      const lo = parseInt(p.range.low, 10), hi = parseInt(p.range.high, 10)
+      const sorted = [...p.range.tracks].sort((a, b) => parseInt(a, 10) - parseInt(b, 10))
+      // If the range skips tracks, list the actual platforms so the span isn't misleading.
+      const gappy = !(Number.isFinite(lo) && Number.isFinite(hi)) || sorted.length !== hi - lo + 1
       return (
-        <span style={{ color: 'var(--muted)' }} title={'Likely tracks: ' + p.range.tracks.join(', ')}>
+        <span style={{ color: 'var(--muted)' }}>
           Plat {p.range.low}–{p.range.high}{' '}
-          <span className="meta">~{p.range.confidence}% · n={p.n_samples}</span>
+          <span className="meta">
+            ~{p.range.confidence}%{gappy ? ' · ' + sorted.join('/') : ''} · n={p.n_samples}
+          </span>
         </span>
       )
     }
