@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, LINE_COLORS, shortLine, delayColor, fmtDelay, fmtTime } from '../api'
+import StationPicker from '../StationPicker.jsx'
 
 // RTT-style platform: green + bold when confirmed by the board; grey (with confidence + n)
 // when it's our prediction; em-dash when we have neither.
@@ -144,11 +145,7 @@ export default function StationsView() {
   return (
     <div className="wrap">
       <label className="meta">Station&nbsp;
-        <select value={stop} onChange={(e) => setStop(e.target.value)}
-          style={{ background: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--line)',
-            borderRadius: 8, padding: '6px 10px', fontSize: 14, minWidth: 220 }}>
-          {stops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+        <StationPicker stops={stops} value={stop} onChange={setStop} />
       </label>
       <div className="hint" style={{ marginTop: 10 }}>
         Platform: <b style={{ color: 'var(--green)' }}>green = confirmed</b> by the board ·
