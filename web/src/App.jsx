@@ -5,6 +5,7 @@ import MapView from './views/MapView.jsx'
 import StationsView from './views/StationsView.jsx'
 import LinesView from './views/LinesView.jsx'
 import PlatformsView from './views/PlatformsView.jsx'
+import ReloadPrompt from './ReloadPrompt.jsx'
 
 export default function App() {
   const [health, setHealth] = useState(null)
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/platforms" element={<PlatformsView />} />
         <Route path="*" element={<Navigate to="/map" replace />} />
       </Routes>
+      <ReloadPrompt />
     </>
   )
 }
