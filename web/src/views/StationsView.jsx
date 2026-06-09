@@ -76,7 +76,7 @@ export default function StationsView() {
       <label className="meta">Station&nbsp;
         <select value={stop} onChange={(e) => setStop(e.target.value)}
           style={{ background: 'var(--panel)', color: 'var(--text)', border: '1px solid var(--line)',
-            borderRadius: 8, padding: '6px 10px', fontSize: 14 }}>
+            borderRadius: 8, padding: '6px 10px', fontSize: 14, minWidth: 220 }}>
           {stops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </label>
