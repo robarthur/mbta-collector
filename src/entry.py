@@ -19,11 +19,11 @@ import json
 import mbta
 import sql
 import timeutil
-import ui
 
 POLL_INTERVAL_MS = 15_000        # how often we poll MBTA + detect track resolutions
 SNAPSHOT_INTERVAL_MS = 120_000   # how often we persist a full observations snapshot
 DEPARTURE_BOARD_N = 12           # how many upcoming departures the station board shows
+PAGES_URL = "https://estimated-platform.pages.dev/"  # the React app; Worker root redirects here
 # Long-lived / informational effects -> collapsed behind a dropdown on the board.
 ALERT_INFO_EFFECTS = {"SCHEDULE_CHANGE", "SERVICE_CHANGE", "STATION_ISSUE", "SNOW_ROUTE"}
 # Urgent, act-now effects -> always shown.
@@ -354,9 +354,9 @@ class Default(WorkerEntrypoint):
         except Exception:
             pass
 
-        # Legacy inline SPA (served during the React/Pages transition).
+        # The app lives on Cloudflare Pages; the Worker is API-only. Send the root there.
         if path in ("/", "", "/ui"):
-            return Response(ui.PAGE, headers={"content-type": "text/html;charset=UTF-8"})
+            return Response("", status=302, headers={"location": PAGES_URL, **CORS})
 
         db = self.env.DB
 
