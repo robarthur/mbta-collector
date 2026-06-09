@@ -85,45 +85,65 @@ def _json(obj, max_age=15):
 
 PREDICT_SINGLE_MIN = 60     # at/above this modal confidence we show a single platform
 PREDICT_RANGE_COVERAGE = 80  # else widen to the platforms covering this cumulative share
+SHRINK_K = 4.0               # pseudocount strength for hierarchical shrinkage train<-branch<-line
 
 
 def _track_key(t):
     return (int(t) if t.isdigit() else 9999, t)
 
 
-def _predict_from(train, branch, line, tn, rp, rid):
-    """Predicted track from historical priors, backoff: train# -> branch -> line.
+def _smoothed_dist(train_d, branch_d, line_d, k=SHRINK_K):
+    """Hierarchical-shrinkage track probability distribution: the train-level counts are
+    smoothed toward the branch distribution, which is smoothed toward the line distribution
+    (each via k pseudocounts). Small samples are pulled toward the broader prior, so a train
+    seen 3-of-6 on a track no longer claims 50% -- the confidence reflects the real evidence.
+    Returns a ranked list of (track, probability) summing to 1, or None if there's no data."""
+    tracks = set(train_d) | set(branch_d) | set(line_d)
+    if not tracks:
+        return None
+    line_tot = sum(line_d.values())
+    p = ({t: line_d.get(t, 0) / line_tot for t in tracks} if line_tot
+         else {t: 1.0 / len(tracks) for t in tracks})
+    b_tot = sum(branch_d.values())
+    p = {t: (branch_d.get(t, 0) + k * p[t]) / (b_tot + k) for t in tracks}
+    t_tot = sum(train_d.values())
+    p = {t: (train_d.get(t, 0) + k * p[t]) / (t_tot + k) for t in tracks}
+    return sorted(p.items(), key=lambda kv: -kv[1])
 
-    Returns the modal track + confidence, and -- when the modal confidence is below
-    PREDICT_SINGLE_MIN -- a contiguous platform `range` spanning the most-likely tracks that
-    together cover ~PREDICT_RANGE_COVERAGE% of history (so a low-confidence single guess is
-    presented honestly as e.g. "Plat 1-5 ~78%").
-    """
-    def _from(dist, basis):
-        total = sum(dist.values())
-        ranked = sorted(dist.items(), key=lambda kv: -kv[1])
-        modal_pct = 100 * ranked[0][1] / total
-        out = {"predicted_track": ranked[0][0], "confidence": round(modal_pct),
-               "alternatives": [{"track": t, "pct": round(100 * n / total)} for t, n in ranked[:5]],
-               "basis": basis, "n_samples": total}
-        if modal_pct < PREDICT_SINGLE_MIN:
-            chosen, acc = [], 0
-            for t, n in ranked:
-                chosen.append(t)
-                acc += n
-                if 100 * acc / total >= PREDICT_RANGE_COVERAGE:
-                    break
-            nums = sorted(chosen, key=_track_key)
-            out["range"] = {"low": nums[0], "high": nums[-1], "tracks": chosen,
-                            "confidence": round(100 * acc / total)}
-        return out
-    if tn and train.get(tn) and sum(train[tn].values()) >= 3:
-        return _from(train[tn], "train")
-    if rp and branch.get(rp) and sum(branch[rp].values()) >= 5:
-        return _from(branch[rp], "branch")
-    if rid and line.get(rid):
-        return _from(line[rid], "line")
-    return None
+
+def _dist_to_prediction(ranked, basis, n):
+    """Shape a ranked (track, prob) distribution into the prediction payload, adding a
+    contiguous platform `range` when the modal probability is below PREDICT_SINGLE_MIN."""
+    if not ranked:
+        return None
+    modal_pct = 100 * ranked[0][1]
+    out = {"predicted_track": ranked[0][0], "confidence": round(modal_pct),
+           "alternatives": [{"track": t, "pct": round(100 * pr)} for t, pr in ranked[:5]],
+           "basis": basis, "n_samples": n}
+    if modal_pct < PREDICT_SINGLE_MIN:
+        chosen, acc = [], 0.0
+        for t, pr in ranked:
+            chosen.append(t)
+            acc += pr
+            if 100 * acc >= PREDICT_RANGE_COVERAGE:
+                break
+        nums = sorted(chosen, key=_track_key)
+        out["range"] = {"low": nums[0], "high": nums[-1], "tracks": chosen,
+                        "confidence": round(100 * acc)}
+    return out
+
+
+def _predict_from(train, branch, line, tn, rp, rid):
+    """Predicted departure track from historical priors via hierarchical shrinkage
+    (train <- branch <- line). Confidence is the smoothed modal probability, so it is honest
+    at low sample sizes; a `range` is added when that probability is below PREDICT_SINGLE_MIN."""
+    train_d = (train.get(tn) or {}) if tn else {}
+    branch_d = (branch.get(rp) or {}) if rp else {}
+    line_d = (line.get(rid) or {}) if rid else {}
+    ranked = _smoothed_dist(train_d, branch_d, line_d)
+    t_tot, b_tot = sum(train_d.values()), sum(branch_d.values())
+    basis = "train" if t_tot else "branch" if b_tot else "line"
+    return _dist_to_prediction(ranked, basis, t_tot or b_tot or sum(line_d.values()))
 
 
 class Collector(DurableObject):
@@ -502,22 +522,24 @@ class Default(WorkerEntrypoint):
                 branch_c.setdefault((s, r["route_pattern_id"]), Counter())[t] += 1
             line_c.setdefault((s, r.get("route_id")), Counter())[t] += 1
 
+        def _minus(counts, key, m):
+            d = dict(counts.get(key) or {})
+            if m is not None and d.get(m):
+                d[m] -= 1
+                if d[m] <= 0:
+                    del d[m]
+            return d
+
         def pick(s, tn, rp, rid, minus):
-            # ranked track dist via backoff, with `minus` (the held-out outcome) subtracted.
-            for counts, key, basis, mn in ((train_c, (s, tn), "train", 3),
-                                           (branch_c, (s, rp), "branch", 5),
-                                           (line_c, (s, rid), "line", 1)):
-                if key[1] is None:
-                    continue
-                d = dict(counts.get(key) or {})
-                if minus is not None and d.get(minus):
-                    d[minus] -= 1
-                    if d[minus] <= 0:
-                        del d[minus]
-                tot = sum(d.values())
-                if tot >= mn:
-                    return sorted(d.items(), key=lambda kv: -kv[1]), basis, tot
-            return None, None, 0
+            # Same hierarchical-shrinkage predictor as live; for LOO the held-out outcome is
+            # subtracted from all three levels it contributed to.
+            train_d = _minus(train_c, (s, tn), minus) if tn else {}
+            branch_d = _minus(branch_c, (s, rp), minus) if rp else {}
+            line_d = _minus(line_c, (s, rid), minus)
+            ranked = _smoothed_dist(train_d, branch_d, line_d)
+            t_tot, b_tot = sum(train_d.values()), sum(branch_d.values())
+            basis = "train" if t_tot else "branch" if b_tot else "line"
+            return ranked, basis, (t_tot or b_tot or sum(line_d.values()))
 
         overall = [0, 0]
         resub = [0, 0]
@@ -532,7 +554,7 @@ class Default(WorkerEntrypoint):
                                       r.get("route_id"), actual)
             if not ranked:
                 continue
-            conf = 100 * ranked[0][1] / tot
+            conf = 100 * ranked[0][1]          # ranked holds probabilities (sum to 1)
             hit = 1 if ranked[0][0] == actual else 0
             overall[0] += 1
             overall[1] += hit
@@ -545,11 +567,11 @@ class Default(WorkerEntrypoint):
             buckets[b][0] += 1
             buckets[b][1] += hit
             if conf < PREDICT_SINGLE_MIN:           # the range we'd actually show
-                acc, cover = 0, set()
-                for tk, ct in ranked:
+                acc, cover = 0.0, set()
+                for tk, pr in ranked:
                     cover.add(tk)
-                    acc += ct
-                    if 100 * acc / tot >= PREDICT_RANGE_COVERAGE:
+                    acc += pr
+                    if 100 * acc >= PREDICT_RANGE_COVERAGE:
                         break
                 rng[0] += 1
                 rng[1] += 1 if actual in cover else 0
