@@ -19,11 +19,13 @@ function Platform({ row }) {
   return <span className="meta">—</span>
 }
 
-function Board({ title, rows }) {
+function Board({ title, rows, loading }) {
   return (
     <>
       <h2>{title}</h2>
-      {rows.length ? (
+      {loading ? (
+        <div className="empty">Loading…</div>
+      ) : rows.length ? (
         <table>
           <thead><tr><th>Time</th><th>Destination</th><th>Line</th><th>Platform</th><th>Status</th></tr></thead>
           <tbody>{rows.map((r, i) => (
@@ -41,7 +43,7 @@ function Board({ title, rows }) {
             </tr>
           ))}</tbody>
         </table>
-      ) : <div className="empty">None.</div>}
+      ) : <div className="empty">No upcoming Commuter Rail trains.</div>}
     </>
   )
 }
@@ -50,6 +52,7 @@ export default function StationsView() {
   const [stops, setStops] = useState([])
   const [stop, setStop] = useState('place-north')
   const [trains, setTrains] = useState([])
+  const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
 
   useEffect(() => { api('/stops').then((d) => setStops(d.stops || [])).catch(() => {}) }, [])
@@ -57,16 +60,21 @@ export default function StationsView() {
   useEffect(() => {
     if (!stop) return
     let active = true
-    const load = async () => {
+    setTrains([]); setLoading(true)  // clear immediately so the station change is visible
+    const load = async (showLoading) => {
+      if (showLoading) setLoading(true)
       try {
         const d = await api('/station?stop=' + encodeURIComponent(stop))
         if (active) { setTrains(d.trains || []); setErr(null) }
       } catch { if (active) setErr('failed to load board') }
+      finally { if (active) setLoading(false) }
     }
-    load()
-    const t = setInterval(load, 30000)
+    load(true)
+    const t = setInterval(() => load(false), 30000)  // background refresh, no loading flash
     return () => { active = false; clearInterval(t) }
   }, [stop])
+
+  const stationName = stops.find((s) => s.id === stop)?.name
 
   const departures = trains.filter((t) => t.direction_id === 0)
   const arrivals = trains.filter((t) => t.direction_id === 1)
@@ -85,8 +93,8 @@ export default function StationsView() {
         <span style={{ color: 'var(--muted)' }}> grey = our prediction (confidence · sample size)</span>.
       </div>
       {err && <div className="empty err">{err}</div>}
-      <Board title="Departures" rows={departures} />
-      <Board title="Arrivals" rows={arrivals} />
+      <Board title={`Departures — ${stationName || '…'}`} rows={departures} loading={loading} />
+      <Board title="Arrivals" rows={arrivals} loading={loading} />
     </div>
   )
 }
