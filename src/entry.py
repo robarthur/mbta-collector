@@ -76,6 +76,23 @@ def _json(obj, max_age=15):
     return Response(json.dumps(obj), headers=headers)
 
 
+def _predict_from(train, branch, line, tn, rp, rid):
+    """Predicted track from historical priors, backoff: train# -> branch -> line."""
+    def _from(dist, basis):
+        total = sum(dist.values())
+        ranked = sorted(dist.items(), key=lambda kv: -kv[1])
+        return {"predicted_track": ranked[0][0], "confidence": round(100 * ranked[0][1] / total),
+                "alternatives": [{"track": t, "pct": round(100 * n / total)} for t, n in ranked[:3]],
+                "basis": basis, "n_samples": total}
+    if tn and train.get(tn) and sum(train[tn].values()) >= 3:
+        return _from(train[tn], "train")
+    if rp and branch.get(rp) and sum(branch[rp].values()) >= 5:
+        return _from(branch[rp], "branch")
+    if rid and line.get(rid):
+        return _from(line[rid], "line")
+    return None
+
+
 class Collector(DurableObject):
     # --- alarm lifecycle ---------------------------------------------------
     async def arm(self):
@@ -348,9 +365,15 @@ class Default(WorkerEntrypoint):
                 return _json({"error": "stop required"})
             api_key = env_get(self.env, "MBTA_API_KEY")
             board = mbta.parse_station_board(await mbta.fetch_station_predictions(stop, api_key))
+            # Per-train platform prediction for the stations we track history at.
+            key = next((k for k, s in mbta.STATIONS.items() if s["station_id"] == stop), None)
+            priors = await self._load_priors(db, key) if key else None
             for d in board:
                 d["delay_s"] = timeutil.lead_seconds(d.get("predicted_time"), d.get("scheduled_time"))
-            return _json({"stop": stop, "departures": board[:20]}, max_age=20)
+                d["prediction"] = (_predict_from(*priors, d.get("trip_name"),
+                                                 d.get("route_pattern_id"), d.get("route_id"))
+                                   if priors else None)
+            return _json({"stop": stop, "trains": board[:40]}, max_age=20)
 
         if path == "/history":
             return _json({
@@ -423,6 +446,17 @@ class Default(WorkerEntrypoint):
             "service_date": sd,
             "berthed_board_not_posted": rows,
         }
+
+    async def _load_priors(self, db, station):
+        """(train, branch, line) track-distribution priors for a platform station."""
+        train, branch, line = {}, {}, {}
+        for r in _rows(await _bound(db, sql.PRIORS_TRAIN, [station]).all()):
+            train.setdefault(r.get("trip_name"), {})[str(r.get("resolved_track"))] = r.get("n")
+        for r in _rows(await _bound(db, sql.PRIORS_BRANCH, [station]).all()):
+            branch.setdefault(r.get("route_pattern_id"), {})[str(r.get("resolved_track"))] = r.get("n")
+        for r in _rows(await _bound(db, sql.PRIORS_LINE, [station]).all()):
+            line.setdefault(r.get("route_id"), {})[str(r.get("resolved_track"))] = r.get("n")
+        return train, branch, line
 
     async def _predict(self, db, station):
         spec = mbta.STATIONS.get(station)

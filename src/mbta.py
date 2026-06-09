@@ -291,9 +291,10 @@ def parse_cr_stops(payload):
 
 
 async def fetch_station_predictions(stop, api_key=None):
-    """Upcoming CR predictions at a stop, with scheduled times + trip (destination) + route."""
+    """Upcoming CR predictions at a stop, with scheduled times + trip + route + stop
+    (the stop gives the confirmed platform_code once the board posts it)."""
     params = {"filter[stop]": stop, "filter[route_type]": ROUTE_TYPE_CR,
-              "include": "schedule,trip,route", "sort": "departure_time"}
+              "include": "schedule,trip,route,stop", "sort": "departure_time"}
     async with httpx.AsyncClient(timeout=20.0) as client:
         r = await client.get(f"{API_BASE}/predictions", params=params, headers=_headers(api_key))
         r.raise_for_status()
@@ -301,17 +302,23 @@ async def fetch_station_predictions(stop, api_key=None):
 
 
 def parse_station_board(payload):
-    """Upcoming departures at a station: scheduled vs predicted, destination, status."""
+    """Upcoming trains at a station: scheduled vs predicted, destination, status, and the
+    confirmed platform (platform_code of the prediction's stop, present once posted)."""
     included = payload.get("included") or []
-    schedules, trips = {}, {}
+    schedules, trips, stop_platform = {}, {}, {}
     for inc in included:
+        t = inc.get("type")
         a = inc.get("attributes") or {}
-        if inc.get("type") == "schedule":
+        rel = inc.get("relationships") or {}
+        if t == "schedule":
             schedules[inc.get("id")] = {"arrival_time": a.get("arrival_time"),
                                         "departure_time": a.get("departure_time")}
-        elif inc.get("type") == "trip":
+        elif t == "trip":
             trips[inc.get("id")] = {"name": a.get("name"), "headsign": a.get("headsign"),
-                                    "direction_id": a.get("direction_id")}
+                                    "direction_id": a.get("direction_id"),
+                                    "route_pattern_id": _rel_id(rel, "route_pattern")}
+        elif t == "stop":
+            stop_platform[inc.get("id")] = a.get("platform_code")
     out = []
     for p in payload.get("data") or []:
         a = p.get("attributes") or {}
@@ -322,12 +329,14 @@ def parse_station_board(payload):
         else:
             pred_t, sched_t = a.get("arrival_time"), sched.get("arrival_time")
         if not pred_t:
-            continue  # already departed / no upcoming time
+            continue
         ti = trips.get(_rel_id(rel, "trip"), {})
         out.append({
             "trip_name": ti.get("name"), "headsign": ti.get("headsign"),
             "direction_id": ti.get("direction_id"), "route_id": _rel_id(rel, "route"),
+            "route_pattern_id": ti.get("route_pattern_id"),
             "scheduled_time": sched_t, "predicted_time": pred_t, "status": a.get("status"),
+            "confirmed_track": stop_platform.get(_rel_id(rel, "stop")),
         })
     out.sort(key=lambda d: d["predicted_time"])
     return out
