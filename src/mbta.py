@@ -324,11 +324,13 @@ def parse_station_board(payload):
         a = p.get("attributes") or {}
         rel = p.get("relationships") or {}
         sched = schedules.get(_rel_id(rel, "schedule"), {})
-        if a.get("departure_time"):
+        # The worker's vendored httpx leaves JSON null as a JsNull proxy (not Python None),
+        # so test for a real ISO string instead of truthiness/`is None`.
+        if isinstance(a.get("departure_time"), str):
             pred_t, sched_t = a.get("departure_time"), sched.get("departure_time")
         else:
             pred_t, sched_t = a.get("arrival_time"), sched.get("arrival_time")
-        if not pred_t:
+        if not isinstance(pred_t, str):
             continue
         ti = trips.get(_rel_id(rel, "trip"), {})
         out.append({
@@ -336,19 +338,24 @@ def parse_station_board(payload):
             "trip_name": ti.get("name"), "headsign": ti.get("headsign"),
             "direction_id": ti.get("direction_id"), "route_id": _rel_id(rel, "route"),
             "route_pattern_id": ti.get("route_pattern_id"),
-            "scheduled_time": sched_t, "predicted_time": pred_t, "status": a.get("status"),
+            "scheduled_time": sched_t if isinstance(sched_t, str) else None,
+            "predicted_time": pred_t, "status": a.get("status"),
             "confirmed_track": stop_platform.get(_rel_id(rel, "stop")),
+            # Predictions DO preserve a null departure_time at a terminus (unlike schedules,
+            # which the worker fills), so a missing real departure string => terminates here.
+            # The /station handler still lets a matching schedule row override this.
+            "is_arrival": not isinstance(a.get("departure_time"), str),
         })
     out.sort(key=lambda d: d["predicted_time"])
     return out
 
 
-async def fetch_station_schedules(stop, api_key=None, min_time=None, limit=12):
-    """Next scheduled CR departures (direction 0) at a stop -- the booked timetable, so the
-    departures board stays populated even when no live prediction has posted yet."""
+async def fetch_station_schedules(stop, api_key=None, min_time=None, limit=50):
+    """Upcoming scheduled CR stop-times at a stop, BOTH directions -- the booked timetable
+    that keeps the boards populated when no live prediction has posted yet. Every stop-time
+    has an arrival_time, so we sort by that; departure_time is absent only at a terminus."""
     params = {"filter[stop]": stop, "filter[route_type]": ROUTE_TYPE_CR,
-              "filter[direction_id]": "0", "sort": "departure_time",
-              "page[limit]": str(limit), "include": "trip,route"}
+              "sort": "arrival_time", "page[limit]": str(limit), "include": "trip,route"}
     if min_time:
         params["filter[min_time]"] = min_time
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -358,7 +365,8 @@ async def fetch_station_schedules(stop, api_key=None, min_time=None, limit=12):
 
 
 def parse_station_schedules(payload):
-    """Scheduled departures: trip_id, train number, destination, route, route_pattern, time."""
+    """Scheduled stop-times: trip_id, train number, destination, direction, route, time, and
+    is_arrival (terminates here = no departure_time)."""
     trips = {}
     for inc in payload.get("included") or []:
         if inc.get("type") == "trip":
@@ -371,17 +379,22 @@ def parse_station_schedules(payload):
     for s in payload.get("data") or []:
         a = s.get("attributes") or {}
         rel = s.get("relationships") or {}
-        dep = a.get("departure_time")
-        if not dep:
-            continue  # arrival-only stop time (e.g. a terminus arrival) -- not a departure
+        arr, dep = a.get("arrival_time"), a.get("departure_time")
+        t = dep if isinstance(dep, str) else arr
+        if not isinstance(t, str):
+            continue
         tid = _rel_id(rel, "trip")
         ti = trips.get(tid, {})
         out.append({
             "trip_id": tid, "trip_name": ti.get("name"), "headsign": ti.get("headsign"),
-            "direction_id": 0, "route_id": _rel_id(rel, "route"),
+            "direction_id": ti.get("direction_id"), "route_id": _rel_id(rel, "route"),
             "route_pattern_id": ti.get("route_pattern_id"),
-            "scheduled_time": dep, "predicted_time": None, "status": None,
+            "scheduled_time": t, "predicted_time": None, "status": None,
             "confirmed_track": None,
+            # pickup_type == 1 means "no boarding here" i.e. the train terminates -> arrival.
+            # (The worker's httpx fills departure_time even at a terminus, so time presence
+            # can't be used; pickup_type is the reliable GTFS signal and survives as an int.)
+            "is_arrival": a.get("pickup_type") == 1,
         })
     return out
 

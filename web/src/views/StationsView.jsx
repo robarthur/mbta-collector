@@ -154,7 +154,8 @@ export default function StationsView() {
       {err && <div className="empty err">{err}</div>}
       <Alerts items={board.alerts} />
       <Board title={`Departures — ${stationName || '…'}`} rows={departures} loading={loading} />
-      <Board title="Arrivals" rows={arrivals} loading={loading} />
+      {(loading || arrivals.length > 0) &&
+        <Board title="Arrivals" rows={arrivals} loading={loading} />}
     </div>
   )
 }

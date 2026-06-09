@@ -398,28 +398,44 @@ class Default(WorkerEntrypoint):
                 return _json({"error": "stop required"})
             api_key = env_get(self.env, "MBTA_API_KEY")
             board = mbta.parse_station_board(await mbta.fetch_station_predictions(stop, api_key))
-            preds = {r["trip_id"]: r for r in board if r.get("trip_id")}
-
-            # Arrivals: live predictions only (inbound trains are predicted well ahead).
-            arrivals = [r for r in board if r.get("direction_id") == 1]
-
-            # Departures: the booked timetable (next N) as the spine, with each row enriched
-            # by its live prediction (time/status/confirmed platform) when one has posted.
-            # MBTA only predicts a departure once a set is assigned, so the schedule keeps the
-            # board populated in the gaps; the union also picks up late trains still predicting.
             sched = mbta.parse_station_schedules(
-                await mbta.fetch_station_schedules(stop, api_key, timeutil.eastern_hhmm(), DEPARTURE_BOARD_N))
-            departures, seen = [], set()
-            for s in sched:
-                p = preds.get(s["trip_id"])
-                departures.append({**s, **{k: p[k] for k in
-                                  ("predicted_time", "status", "confirmed_track")} } if p else s)
-                seen.add(s["trip_id"])
-            for r in board:  # live departure predictions not in the upcoming schedule (e.g. late)
-                if r.get("direction_id") == 0 and r.get("trip_id") not in seen:
-                    departures.append(r)
-            departures.sort(key=lambda d: d.get("predicted_time") or d.get("scheduled_time") or "")
-            departures = departures[:DEPARTURE_BOARD_N]
+                await mbta.fetch_station_schedules(stop, api_key, timeutil.eastern_hhmm()))
+
+            # The schedule (pickup_type) is authoritative on whether a train terminates here;
+            # apply it to the live predictions, which carry no such flag. Match on trip_id, with
+            # a train-number fallback (ids vary across feeds for added/variant trips).
+            sched_is_arr = {s["trip_id"]: s["is_arrival"] for s in sched if s.get("trip_id")}
+            sched_is_arr_byname = {s["trip_name"]: s["is_arrival"] for s in sched if s.get("trip_name")}
+            for r in board:
+                v = sched_is_arr.get(r.get("trip_id"))
+                if v is None:
+                    v = sched_is_arr_byname.get(r.get("trip_name"))
+                if v is not None:  # else keep the prediction's own (reliable) classification
+                    r["is_arrival"] = v
+
+            # Departures = any train with a departure_time (both directions -- destination shows
+            # which way; this is what makes through-stations like Melrose Highlands show both
+            # directions). Arrivals = trains that only terminate here. Both use the booked
+            # schedule as the spine, overlaid with each train's live prediction (time/status/
+            # confirmed platform), plus any live train not yet in the upcoming schedule.
+            def _merge(is_arr):
+                spine = [s for s in sched if s["is_arrival"] == is_arr]
+                live = [r for r in board if r.get("is_arrival") == is_arr]
+                preds = {r["trip_id"]: r for r in live if r.get("trip_id")}
+                rows, seen = [], set()
+                for s in spine:
+                    p = preds.get(s["trip_id"])
+                    rows.append({**s, **{k: p[k] for k in ("predicted_time", "status", "confirmed_track")}}
+                                if p else s)
+                    seen.add(s["trip_id"])
+                for r in live:
+                    if r.get("trip_id") not in seen:
+                        rows.append(r)
+                rows.sort(key=lambda d: d.get("predicted_time") or d.get("scheduled_time") or "")
+                return rows[:DEPARTURE_BOARD_N]
+
+            departures = _merge(False)
+            arrivals = _merge(True)
 
             # Per-train platform prediction for the stations we track history at.
             key = next((k for k, s in mbta.STATIONS.items() if s["station_id"] == stop), None)
@@ -453,7 +469,7 @@ class Default(WorkerEntrypoint):
                 banner.append({"effect": it["effect"], "severity": it["severity"],
                                "header": it["header"],
                                "tier": "info" if it["effect"] in ALERT_INFO_EFFECTS else "urgent"})
-            return _json({"stop": stop, "departures": departures, "arrivals": arrivals[:40],
+            return _json({"stop": stop, "departures": departures, "arrivals": arrivals,
                           "alerts": banner[:12]}, max_age=20)
 
         if path == "/history":
