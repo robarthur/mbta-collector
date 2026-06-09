@@ -241,3 +241,9 @@ RECENT_EVENTS = (
     "lead_to_arrival_s, lead_to_departure_s "
     "FROM track_events ORDER BY resolved_ts DESC LIMIT 25"
 )
+
+# All resolved track outcomes, for the leave-one-out backtest of the platform predictor.
+BACKTEST_EVENTS = (
+    "SELECT station, trip_name, route_pattern_id, route_id, resolved_track, service_date "
+    "FROM track_events WHERE resolved_track IS NOT NULL"
+)

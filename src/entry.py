@@ -479,7 +479,111 @@ class Default(WorkerEntrypoint):
                 "by_hour_et": _rows(await db.prepare(sql.HISTORY_BY_HOUR).all()),
             })
 
+        if path == "/backtest":
+            return _json(await self._backtest(db), max_age=3600)
+
         return Response("Not Found", status=404)
+
+    async def _backtest(self, db):
+        """Leave-one-out backtest of the departure-platform predictor: for every resolved
+        track outcome, predict it from all the OTHER outcomes (its own removed) using the live
+        predictor's backoff (train>=3 -> branch>=5 -> line), and score the hit-rate. This is an
+        honest out-of-sample number, unlike the in-sample confidence shown on the board."""
+        from collections import Counter
+        rows = _rows(await db.prepare(sql.BACKTEST_EVENTS).all())
+        train_c, branch_c, line_c = {}, {}, {}
+        for r in rows:
+            s, t = r.get("station"), r.get("resolved_track")
+            if not t:
+                continue
+            if r.get("trip_name"):
+                train_c.setdefault((s, r["trip_name"]), Counter())[t] += 1
+            if r.get("route_pattern_id"):
+                branch_c.setdefault((s, r["route_pattern_id"]), Counter())[t] += 1
+            line_c.setdefault((s, r.get("route_id")), Counter())[t] += 1
+
+        def pick(s, tn, rp, rid, minus):
+            # ranked track dist via backoff, with `minus` (the held-out outcome) subtracted.
+            for counts, key, basis, mn in ((train_c, (s, tn), "train", 3),
+                                           (branch_c, (s, rp), "branch", 5),
+                                           (line_c, (s, rid), "line", 1)):
+                if key[1] is None:
+                    continue
+                d = dict(counts.get(key) or {})
+                if minus is not None and d.get(minus):
+                    d[minus] -= 1
+                    if d[minus] <= 0:
+                        del d[minus]
+                tot = sum(d.values())
+                if tot >= mn:
+                    return sorted(d.items(), key=lambda kv: -kv[1]), basis, tot
+            return None, None, 0
+
+        overall = [0, 0]
+        resub = [0, 0]
+        by = {}          # (station, basis) -> [n, hits]
+        buckets = {}     # confidence decile -> [n, hits]  (calibration)
+        rng = [0, 0]     # low-confidence range coverage [n, contains]
+        for r in rows:
+            s, actual = r.get("station"), r.get("resolved_track")
+            if not actual:
+                continue
+            ranked, basis, tot = pick(s, r.get("trip_name"), r.get("route_pattern_id"),
+                                      r.get("route_id"), actual)
+            if not ranked:
+                continue
+            conf = 100 * ranked[0][1] / tot
+            hit = 1 if ranked[0][0] == actual else 0
+            overall[0] += 1
+            overall[1] += hit
+            k = (s, basis)
+            by.setdefault(k, [0, 0])
+            by[k][0] += 1
+            by[k][1] += hit
+            b = min(int(conf // 10) * 10, 90)
+            buckets.setdefault(b, [0, 0])
+            buckets[b][0] += 1
+            buckets[b][1] += hit
+            if conf < PREDICT_SINGLE_MIN:           # the range we'd actually show
+                acc, cover = 0, set()
+                for tk, ct in ranked:
+                    cover.add(tk)
+                    acc += ct
+                    if 100 * acc / tot >= PREDICT_RANGE_COVERAGE:
+                        break
+                rng[0] += 1
+                rng[1] += 1 if actual in cover else 0
+            # resubstitution (in-sample) for the optimism comparison
+            rr, _, rt = pick(s, r.get("trip_name"), r.get("route_pattern_id"), r.get("route_id"), None)
+            if rr:
+                resub[0] += 1
+                resub[1] += 1 if rr[0][0] == actual else 0
+
+        # per-train consistency (how concentrated each train's track is), trains with >=3 obs
+        consistency = {}
+        for (s, _tn), cnt in train_c.items():
+            tot = sum(cnt.values())
+            if tot < 3:
+                continue
+            modal = max(cnt.values()) / tot
+            cs = consistency.setdefault(s, {"trains": 0, "high>=80%": 0, "mid50-80%": 0, "low<50%": 0})
+            cs["trains"] += 1
+            cs["high>=80%" if modal >= 0.8 else "mid50-80%" if modal >= 0.5 else "low<50%"] += 1
+
+        return {
+            "n": overall[0],
+            "loo_hit_rate": round(100 * overall[1] / overall[0]) if overall[0] else None,
+            "resub_hit_rate": round(100 * resub[1] / resub[0]) if resub[0] else None,
+            "by_station_basis": [{"station": s, "basis": b, "n": v[0],
+                                  "hit_rate": round(100 * v[1] / v[0])}
+                                 for (s, b), v in sorted(by.items())],
+            "calibration": [{"confidence": f"{b}-{b + 9}%", "n": v[0],
+                             "actual_hit_rate": round(100 * v[1] / v[0])}
+                            for b, v in sorted(buckets.items())],
+            "range_coverage": {"n": rng[0], "target_pct": PREDICT_RANGE_COVERAGE,
+                               "actual_contains_pct": round(100 * rng[1] / rng[0]) if rng[0] else None},
+            "train_consistency": consistency,
+        }
 
     async def _board(self, db, station):
         spec = mbta.STATIONS.get(station)
