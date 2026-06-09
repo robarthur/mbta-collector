@@ -24,10 +24,12 @@ import ui
 POLL_INTERVAL_MS = 15_000        # how often we poll MBTA + detect track resolutions
 SNAPSHOT_INTERVAL_MS = 120_000   # how often we persist a full observations snapshot
 DEPARTURE_BOARD_N = 12           # how many upcoming departures the station board shows
-# Service-affecting alert effects worth a board banner (excludes elevator/parking/access noise).
-ALERT_BANNER_EFFECTS = {"CANCELLATION", "DELAY", "SUSPENSION", "TRACK_CHANGE", "DETOUR",
-                        "SERVICE_CHANGE", "SCHEDULE_CHANGE", "SHUTTLE", "STATION_CLOSURE",
-                        "SNOW_ROUTE", "NO_SERVICE", "STOP_CLOSURE", "STATION_ISSUE"}
+# Long-lived / informational effects -> collapsed behind a dropdown on the board.
+ALERT_INFO_EFFECTS = {"SCHEDULE_CHANGE", "SERVICE_CHANGE", "STATION_ISSUE", "SNOW_ROUTE"}
+# Urgent, act-now effects -> always shown.
+ALERT_URGENT_EFFECTS = {"CANCELLATION", "NO_SERVICE", "SUSPENSION", "DELAY", "TRACK_CHANGE",
+                        "SHUTTLE", "DETOUR", "STATION_CLOSURE", "STOP_CLOSURE"}
+ALERT_BANNER_EFFECTS = ALERT_INFO_EFFECTS | ALERT_URGENT_EFFECTS
 DO_NAME = "collector"
 
 
@@ -439,6 +441,8 @@ class Default(WorkerEntrypoint):
             board_routes = {d.get("route_id") for d in departures + arrivals if d.get("route_id")}
             banner, seen_hdr = [], set()
             for it in alerts["items"]:
+                if it["trains"]:
+                    continue  # train-specific -> shown on that train's row, not the banner
                 if it["effect"] not in ALERT_BANNER_EFFECTS:
                     continue
                 if not (stop in it["stops"] or (board_routes & set(it["routes"]))):
@@ -447,9 +451,10 @@ class Default(WorkerEntrypoint):
                     continue
                 seen_hdr.add(it["header"])
                 banner.append({"effect": it["effect"], "severity": it["severity"],
-                               "header": it["header"]})
+                               "header": it["header"],
+                               "tier": "info" if it["effect"] in ALERT_INFO_EFFECTS else "urgent"})
             return _json({"stop": stop, "departures": departures, "arrivals": arrivals[:40],
-                          "alerts": banner[:6]}, max_age=20)
+                          "alerts": banner[:12]}, max_age=20)
 
         if path == "/history":
             return _json({

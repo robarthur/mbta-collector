@@ -52,17 +52,28 @@ function Status({ row: r, cancelled }) {
   return <span style={{ color }}>{text}</span>
 }
 
-// Station-level service alerts shown above the boards. Cancellations/suspensions red, rest amber.
+// Station-level service alerts. Urgent (delay/cancellation/track change) shown inline;
+// informational notices (schedule changes etc.) tucked behind a dropdown to cut clutter.
+const RED_EFFECTS = new Set(['CANCELLATION', 'NO_SERVICE', 'SUSPENSION', 'STATION_CLOSURE', 'STOP_CLOSURE'])
+const AlertRow = ({ a }) => (
+  <div className={'alert' + (RED_EFFECTS.has(a.effect) ? ' alert-red' : '')}>
+    <b>{EFFECT_LABEL[a.effect] || a.effect}</b> {a.header}
+  </div>
+)
+
 function Alerts({ items }) {
   if (!items || !items.length) return null
-  const red = new Set(['CANCELLATION', 'NO_SERVICE', 'SUSPENSION', 'STATION_CLOSURE', 'STOP_CLOSURE'])
+  const urgent = items.filter((a) => a.tier !== 'info')
+  const info = items.filter((a) => a.tier === 'info')
   return (
     <div className="alerts">
-      {items.map((a, i) => (
-        <div key={i} className={'alert' + (red.has(a.effect) ? ' alert-red' : '')}>
-          <b>{EFFECT_LABEL[a.effect] || a.effect}</b> {a.header}
-        </div>
-      ))}
+      {urgent.map((a, i) => <AlertRow key={i} a={a} />)}
+      {info.length > 0 && (
+        <details className="alert-more">
+          <summary>{info.length} service notice{info.length > 1 ? 's' : ''}</summary>
+          {info.map((a, i) => <AlertRow key={i} a={a} />)}
+        </details>
+      )}
     </div>
   )
 }

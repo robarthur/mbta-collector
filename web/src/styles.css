@@ -62,3 +62,13 @@ th { color:var(--muted); font-weight:600; font-size:12px; text-transform:upperca
 .alert b { color: var(--amber); }
 .alert-red { background: rgba(226,112,107,.12); border-color: rgba(226,112,107,.45); }
 .alert-red b { color: var(--red); }
+
+.alert-more { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.alert-more > summary {
+  cursor: pointer; padding: 8px 12px; font-size: 13px; color: var(--muted); list-style: none;
+}
+.alert-more > summary::before { content: '▸ '; }
+.alert-more[open] > summary::before { content: '▾ '; }
+.alert-more > summary:hover { color: var(--text); }
+.alert-more .alert { margin: 0 8px 8px; }
+.alert-more[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 8px; }
