@@ -24,6 +24,10 @@ import ui
 POLL_INTERVAL_MS = 15_000        # how often we poll MBTA + detect track resolutions
 SNAPSHOT_INTERVAL_MS = 120_000   # how often we persist a full observations snapshot
 DEPARTURE_BOARD_N = 12           # how many upcoming departures the station board shows
+# Service-affecting alert effects worth a board banner (excludes elevator/parking/access noise).
+ALERT_BANNER_EFFECTS = {"CANCELLATION", "DELAY", "SUSPENSION", "TRACK_CHANGE", "DETOUR",
+                        "SERVICE_CHANGE", "SCHEDULE_CHANGE", "SHUTTLE", "STATION_CLOSURE",
+                        "SNOW_ROUTE", "NO_SERVICE", "STOP_CLOSURE", "STATION_ISSUE"}
 DO_NAME = "collector"
 
 
@@ -423,7 +427,29 @@ class Default(WorkerEntrypoint):
                 d["prediction"] = (_predict_from(*priors, d.get("trip_name"),
                                                  d.get("route_pattern_id"), d.get("route_id"))
                                    if priors else None)
-            return _json({"stop": stop, "departures": departures, "arrivals": arrivals[:40]}, max_age=20)
+
+            # Alerts: tag each train named by an alert (cancelled/delayed/track change), and
+            # surface a banner of service-affecting alerts relevant to this station.
+            alerts = mbta.parse_alerts(await mbta.fetch_alerts(api_key))
+            for d in departures + arrivals:
+                al = alerts["by_train"].get(d.get("trip_name"))
+                if al:
+                    d["alert_effect"] = al["effect"]
+                    d["alert_header"] = al["header"]
+            board_routes = {d.get("route_id") for d in departures + arrivals if d.get("route_id")}
+            banner, seen_hdr = [], set()
+            for it in alerts["items"]:
+                if it["effect"] not in ALERT_BANNER_EFFECTS:
+                    continue
+                if not (stop in it["stops"] or (board_routes & set(it["routes"]))):
+                    continue
+                if it["header"] in seen_hdr:
+                    continue
+                seen_hdr.add(it["header"])
+                banner.append({"effect": it["effect"], "severity": it["severity"],
+                               "header": it["header"]})
+            return _json({"stop": stop, "departures": departures, "arrivals": arrivals[:40],
+                          "alerts": banner[:6]}, max_age=20)
 
         if path == "/history":
             return _json({

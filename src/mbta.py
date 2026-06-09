@@ -386,6 +386,53 @@ def parse_station_schedules(payload):
     return out
 
 
+async def fetch_alerts(api_key=None):
+    """Currently-active Commuter Rail alerts (cancellations, delays, track changes, etc.)."""
+    params = {"filter[route_type]": ROUTE_TYPE_CR, "filter[datetime]": "now"}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{API_BASE}/alerts", params=params, headers=_headers(api_key))
+        r.raise_for_status()
+        return r.json()
+
+
+def _entity_trip_id(e):
+    t = e.get("trip")
+    if isinstance(t, dict):
+        return t.get("id")
+    return t  # V3 flattens trip to its id string
+
+
+def parse_alerts(payload):
+    """Return {by_train: {train_number: {effect, header}}, items: [...]} from the alerts feed.
+
+    Alert trip ids (e.g. 'LowellElevatorWeekday-834458-34') don't share the prediction/schedule
+    trip-id scheme, but their trailing segment is the train number, which is unique per service
+    day and matches the board's trip_name -- so we key per-train tagging on that.
+    """
+    by_train, items = {}, []
+    for a in payload.get("data") or []:
+        at = a.get("attributes") or {}
+        effect = at.get("effect")
+        header = at.get("short_header") or at.get("header")
+        routes, stops, trains = set(), set(), set()
+        for e in at.get("informed_entity") or []:
+            if e.get("route"):
+                routes.add(e["route"])
+            if e.get("stop"):
+                stops.add(e["stop"])
+            tid = _entity_trip_id(e)
+            if tid:
+                num = tid.rsplit("-", 1)[-1]
+                if num.isdigit():
+                    trains.add(num)
+        for num in trains:
+            by_train.setdefault(num, {"effect": effect, "header": header})
+        items.append({"effect": effect, "severity": at.get("severity"), "header": header,
+                      "lifecycle": at.get("lifecycle"), "routes": sorted(routes),
+                      "stops": sorted(stops), "trains": sorted(trains)})
+    return {"by_train": by_train, "items": items}
+
+
 def known_track(obs, track_map):
     """(track, via) for an observation, or (None, None) if the track isn't knowable yet.
 

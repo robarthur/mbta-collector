@@ -35,6 +35,38 @@ function Platform({ row }) {
   return <span className="meta">—</span>
 }
 
+const EFFECT_LABEL = {
+  CANCELLATION: 'Cancelled', NO_SERVICE: 'No service', TRACK_CHANGE: 'Track change',
+  DELAY: 'Delayed', SUSPENSION: 'Suspended', SHUTTLE: 'Shuttle', DETOUR: 'Detour',
+}
+
+// Per-row status: an alert on this train wins (Cancelled/Track change/…), else delay/feed text.
+function Status({ row: r, cancelled }) {
+  if (cancelled) return <span style={{ color: 'var(--red)', fontWeight: 600 }}>Cancelled</span>
+  if (r.alert_effect && EFFECT_LABEL[r.alert_effect])
+    return <span style={{ color: 'var(--amber)' }}>{EFFECT_LABEL[r.alert_effect]}</span>
+  const color = r.predicted_time ? delayColor(r.delay_s) : 'var(--muted)'
+  const text = r.delay_s != null && Math.abs(r.delay_s) > 60
+    ? fmtDelay(r.delay_s)
+    : r.predicted_time ? (r.status || 'On time') : 'Scheduled'
+  return <span style={{ color }}>{text}</span>
+}
+
+// Station-level service alerts shown above the boards. Cancellations/suspensions red, rest amber.
+function Alerts({ items }) {
+  if (!items || !items.length) return null
+  const red = new Set(['CANCELLATION', 'NO_SERVICE', 'SUSPENSION', 'STATION_CLOSURE', 'STOP_CLOSURE'])
+  return (
+    <div className="alerts">
+      {items.map((a, i) => (
+        <div key={i} className={'alert' + (red.has(a.effect) ? ' alert-red' : '')}>
+          <b>{EFFECT_LABEL[a.effect] || a.effect}</b> {a.header}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function Board({ title, rows, loading }) {
   return (
     <>
@@ -44,22 +76,21 @@ function Board({ title, rows, loading }) {
       ) : rows.length ? (
         <table>
           <thead><tr><th>Time</th><th>Destination</th><th>Line</th><th>Platform</th><th>Status</th></tr></thead>
-          <tbody>{rows.map((r, i) => (
-            <tr key={i}>
-              <td>{fmtTime(r.predicted_time || r.scheduled_time)}{' '}
+          <tbody>{rows.map((r, i) => {
+            const cancelled = r.alert_effect === 'CANCELLATION' || r.alert_effect === 'NO_SERVICE'
+            return (
+            <tr key={i} style={cancelled ? { opacity: 0.6 } : undefined}>
+              <td style={cancelled ? { textDecoration: 'line-through' } : undefined}>
+                {fmtTime(r.predicted_time || r.scheduled_time)}{' '}
                 {r.predicted_time && r.scheduled_time && r.scheduled_time !== r.predicted_time &&
                   <span className="meta">(was {fmtTime(r.scheduled_time)})</span>}
               </td>
               <td>{r.headsign}{r.trip_name ? ' · ' + r.trip_name : ''}</td>
               <td><span className="dotc" style={{ background: LINE_COLORS[r.route_id] || '#888' }} /> {shortLine(r.route_id)}</td>
               <td><Platform row={r} /></td>
-              <td style={{ color: r.predicted_time ? delayColor(r.delay_s) : 'var(--muted)' }}>
-                {r.delay_s != null && Math.abs(r.delay_s) > 60
-                  ? fmtDelay(r.delay_s)
-                  : r.predicted_time ? (r.status || 'On time') : 'Scheduled'}
-              </td>
+              <td><Status row={r} cancelled={cancelled} /></td>
             </tr>
-          ))}</tbody>
+          )})}</tbody>
         </table>
       ) : <div className="empty">No upcoming Commuter Rail trains.</div>}
     </>
@@ -113,6 +144,7 @@ export default function StationsView() {
         <span style={{ color: 'var(--muted)' }}> grey = our prediction (confidence · sample size)</span>.
       </div>
       {err && <div className="empty err">{err}</div>}
+      <Alerts items={board.alerts} />
       <Board title={`Departures — ${stationName || '…'}`} rows={departures} loading={loading} />
       <Board title="Arrivals" rows={arrivals} loading={loading} />
     </div>
