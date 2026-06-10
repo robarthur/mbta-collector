@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, LINE_COLORS, shortLine, delayColor, fmtDelay, fmtTime } from '../api'
 import StationPicker from '../StationPicker.jsx'
+import { supported as notifySupported, isWatched, addWatch, removeWatch, requestPermission, checkBoard } from '../watches'
 
 // RTT-style platform: green + bold when confirmed by the board; grey (with confidence + n)
 // when it's our prediction; em-dash when we have neither.
@@ -88,7 +89,7 @@ function Alerts({ items }) {
   )
 }
 
-function Board({ title, rows, loading }) {
+function Board({ title, rows, loading, watchable, onToggle }) {
   return (
     <>
       <h2>{title}</h2>
@@ -96,11 +97,18 @@ function Board({ title, rows, loading }) {
         <div className="empty">Loading…</div>
       ) : rows.length ? (
         <table>
-          <thead><tr><th>Time</th><th>Destination</th><th>Line</th><th>Platform</th><th>Status</th></tr></thead>
+          <thead><tr>{watchable && <th />}<th>Time</th><th>Destination</th><th>Line</th><th>Platform</th><th>Status</th></tr></thead>
           <tbody>{rows.map((r, i) => {
             const cancelled = r.alert_effect === 'CANCELLATION' || r.alert_effect === 'NO_SERVICE'
             return (
             <tr key={i} style={cancelled ? { opacity: 0.6 } : undefined}>
+              {watchable && (
+                <td>{r.trip_id &&
+                  <button className={'bell' + (isWatched(r.trip_id) ? ' on' : '')}
+                    title={isWatched(r.trip_id) ? 'Stop watching' : 'Notify me when the platform posts'}
+                    onClick={() => onToggle(r)}>🔔</button>}
+                </td>
+              )}
               <td style={cancelled ? { textDecoration: 'line-through' } : undefined}>
                 {fmtTime(r.predicted_time || r.scheduled_time)}{' '}
                 {r.predicted_time && r.scheduled_time && r.scheduled_time !== r.predicted_time &&
@@ -137,7 +145,7 @@ export default function StationsView() {
       if (showLoading) setLoading(true)
       try {
         const d = await api('/station?stop=' + encodeURIComponent(stop))
-        if (active) { setBoard(d); setErr(null) }
+        if (active) { setBoard(d); setErr(null); checkBoard(stop, d.departures) }
       } catch { if (active) setErr('failed to load board') }
       finally { if (active) setLoading(false) }
     }
@@ -147,6 +155,23 @@ export default function StationsView() {
   }, [stop])
 
   const stationName = stops.find((s) => s.id === stop)?.name
+
+  const [, setWatchTick] = useState(0)        // re-render after watch toggles (store is external)
+  const [notifyMsg, setNotifyMsg] = useState(null)
+  const toggleWatch = async (r) => {
+    if (isWatched(r.trip_id)) {
+      removeWatch(r.trip_id)
+    } else {
+      const perm = await requestPermission()
+      if (perm !== 'granted') {
+        setNotifyMsg('Notifications are blocked — allow them in your browser settings to watch trains.')
+        return
+      }
+      addWatch(r, stop)
+      setNotifyMsg(null)
+    }
+    setWatchTick((x) => x + 1)
+  }
 
   const departures = board.departures || []
   const arrivals = board.arrivals || []
@@ -161,8 +186,10 @@ export default function StationsView() {
         <span style={{ color: 'var(--muted)' }}> grey = timetabled (sched) or our prediction (confidence · sample size)</span>.
       </div>
       {err && <div className="empty err">{err}</div>}
+      {notifyMsg && <div className="hint" style={{ marginTop: 10 }}>{notifyMsg}</div>}
       <Alerts items={board.alerts} />
-      <Board title={`Departures — ${stationName || '…'}`} rows={departures} loading={loading} />
+      <Board title={`Departures — ${stationName || '…'}`} rows={departures} loading={loading}
+        watchable={notifySupported} onToggle={toggleWatch} />
       {(loading || arrivals.length > 0) &&
         <Board title="Arrivals" rows={arrivals} loading={loading} />}
     </div>

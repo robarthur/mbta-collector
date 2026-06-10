@@ -6,6 +6,7 @@ import StationsView from './views/StationsView.jsx'
 import LinesView from './views/LinesView.jsx'
 import PlatformsView from './views/PlatformsView.jsx'
 import ReloadPrompt from './ReloadPrompt.jsx'
+import { supported as notifySupported, getWatches, checkAll } from './watches'
 
 export default function App() {
   const [health, setHealth] = useState(null)
@@ -13,6 +14,16 @@ export default function App() {
     const load = () => api('/health').then(setHealth).catch(() => {})
     load()
     const t = setInterval(load, 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Watched-train loop: runs app-wide so watches keep firing from any view.
+  useEffect(() => {
+    if (!notifySupported) return
+    const tick = () => {
+      if (Notification.permission === 'granted' && Object.keys(getWatches()).length) checkAll()
+    }
+    const t = setInterval(tick, 30000)
     return () => clearInterval(t)
   }, [])
 
