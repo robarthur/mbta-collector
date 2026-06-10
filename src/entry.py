@@ -14,6 +14,7 @@ mbta.py / sql.py / timeutil.py.
 from workers import WorkerEntrypoint, Response, DurableObject
 from js import JSON
 from urllib.parse import urlparse, parse_qs
+import asyncio
 import json
 
 import mbta
@@ -24,6 +25,7 @@ POLL_INTERVAL_MS = 15_000        # how often we poll MBTA + detect track resolut
 SNAPSHOT_INTERVAL_MS = 120_000   # how often we persist a full observations snapshot
 DEPARTURE_BOARD_N = 12           # how many upcoming departures the station board shows
 PAGES_URL = "https://estimated-platform.pages.dev/"  # the React app; Worker root redirects here
+STALE_AFTER_S = 120              # /health reports "stale" if no successful poll within this
 # Long-lived / informational effects -> collapsed behind a dropdown on the board.
 ALERT_INFO_EFFECTS = {"SCHEDULE_CHANGE", "SERVICE_CHANGE", "STATION_ISSUE", "SNOW_ROUTE"}
 # Urgent, act-now effects -> always shown.
@@ -172,9 +174,27 @@ class Collector(DurableObject):
     async def alarm(self, alarm_info=None):
         try:
             await self._poll()
+            await self.ctx.storage.put("last_poll_ms", timeutil.now_ms())
+        except Exception as e:
+            # Record the failure so /health can surface it; the loop survives via finally.
+            await self.ctx.storage.put("last_error", json.dumps(
+                {"ts": timeutil.now_iso(), "error": repr(e)[:300]}))
+            raise
         finally:
             # Always reschedule so a single failed poll never kills the loop.
             await self.ctx.storage.setAlarm(timeutil.now_ms() + POLL_INTERVAL_MS)
+
+    async def status(self):
+        """Loop liveness for /health: last successful poll, next alarm, last recorded error.
+        Returned as a JSON string (primitives cross the DO RPC boundary reliably)."""
+        last_ms = await self.ctx.storage.get("last_poll_ms")
+        err = await self.ctx.storage.get("last_error")
+        alarm = await self.ctx.storage.getAlarm()
+        return json.dumps({
+            "last_poll_ms": int(last_ms) if last_ms else None,
+            "next_alarm_ms": int(alarm) if alarm else None,
+            "last_error": json.loads(err) if err else None,
+        })
 
     async def poll_now(self):
         """Run one poll synchronously (used by /poll-once for fast feedback)."""
@@ -363,7 +383,21 @@ class Default(WorkerEntrypoint):
         if path == "/health":
             row = (_rows(await db.prepare(sql.HEALTH).all()) or [{}])[0]
             by_station = _rows(await db.prepare(sql.EVENTS_BY_STATION).all())
-            return _json({"status": "ok", "events_by_station": by_station, **row})
+            loop = {}
+            try:
+                loop = json.loads(await self._collector().status())
+            except Exception:
+                pass
+            # Freshness from the DO's per-poll clock (15s granularity); fall back to the
+            # D1 snapshot timestamp (2 min granularity) if the DO is unreachable.
+            age_s = None
+            if loop.get("last_poll_ms"):
+                age_s = max(0, (timeutil.now_ms() - loop["last_poll_ms"]) // 1000)
+            elif row.get("last_poll_ts"):
+                age_s = timeutil.lead_seconds(timeutil.now_iso(), row["last_poll_ts"])
+            status = "ok" if age_s is not None and age_s < STALE_AFTER_S else "stale"
+            return _json({"status": status, "seconds_since_poll": age_s, "loop": loop,
+                          "events_by_station": by_station, **row}, max_age=0)
 
         if path == "/poll-once":
             result = await self._collector().poll_now()
@@ -417,9 +451,13 @@ class Default(WorkerEntrypoint):
             if not stop:
                 return _json({"error": "stop required"})
             api_key = env_get(self.env, "MBTA_API_KEY")
-            board = mbta.parse_station_board(await mbta.fetch_station_predictions(stop, api_key))
-            sched = mbta.parse_station_schedules(
-                await mbta.fetch_station_schedules(stop, api_key, timeutil.eastern_hhmm()))
+            # The three MBTA calls are independent; fetch concurrently (board latency ~3x).
+            preds_raw, sched_raw, alerts_raw = await asyncio.gather(
+                mbta.fetch_station_predictions(stop, api_key),
+                mbta.fetch_station_schedules(stop, api_key, timeutil.eastern_hhmm()),
+                mbta.fetch_alerts(api_key))
+            board = mbta.parse_station_board(preds_raw)
+            sched = mbta.parse_station_schedules(sched_raw)
 
             # The schedule (pickup_type) is authoritative on whether a train terminates here;
             # apply it to the live predictions, which carry no such flag. Match on trip_id, with
@@ -468,7 +506,7 @@ class Default(WorkerEntrypoint):
 
             # Alerts: tag each train named by an alert (cancelled/delayed/track change), and
             # surface a banner of service-affecting alerts relevant to this station.
-            alerts = mbta.parse_alerts(await mbta.fetch_alerts(api_key))
+            alerts = mbta.parse_alerts(alerts_raw)
             for d in departures + arrivals:
                 al = alerts["by_train"].get(d.get("trip_name"))
                 if al:
