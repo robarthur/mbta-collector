@@ -355,7 +355,7 @@ async def fetch_station_schedules(stop, api_key=None, min_time=None, limit=50):
     that keeps the boards populated when no live prediction has posted yet. Every stop-time
     has an arrival_time, so we sort by that; departure_time is absent only at a terminus."""
     params = {"filter[stop]": stop, "filter[route_type]": ROUTE_TYPE_CR,
-              "sort": "arrival_time", "page[limit]": str(limit), "include": "trip,route"}
+              "sort": "arrival_time", "page[limit]": str(limit), "include": "trip,route,stop"}
     if min_time:
         params["filter[min_time]"] = min_time
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -365,9 +365,11 @@ async def fetch_station_schedules(stop, api_key=None, min_time=None, limit=50):
 
 
 def parse_station_schedules(payload):
-    """Scheduled stop-times: trip_id, train number, destination, direction, route, time, and
-    is_arrival (terminates here = no departure_time)."""
-    trips = {}
+    """Scheduled stop-times: trip_id, train number, destination, direction, route, time,
+    is_arrival (terminates here = no departure_time), and scheduled_track (the timetabled
+    platform_code — populated at outlying multi-track stations since May 2023; North and
+    South Station are excluded by MBTA because dispatch assigns their tracks dynamically)."""
+    trips, stop_platform = {}, {}
     for inc in payload.get("included") or []:
         if inc.get("type") == "trip":
             a = inc.get("attributes") or {}
@@ -375,6 +377,9 @@ def parse_station_schedules(payload):
             trips[inc.get("id")] = {"name": a.get("name"), "headsign": a.get("headsign"),
                                     "direction_id": a.get("direction_id"),
                                     "route_pattern_id": _rel_id(rel, "route_pattern")}
+        elif inc.get("type") == "stop":
+            pc = (inc.get("attributes") or {}).get("platform_code")
+            stop_platform[inc.get("id")] = pc if isinstance(pc, str) else None
     out = []
     for s in payload.get("data") or []:
         a = s.get("attributes") or {}
@@ -391,6 +396,7 @@ def parse_station_schedules(payload):
             "route_pattern_id": ti.get("route_pattern_id"),
             "scheduled_time": t, "predicted_time": None, "status": None,
             "confirmed_track": None,
+            "scheduled_track": stop_platform.get(_rel_id(rel, "stop")),
             # pickup_type == 1 means "no boarding here" i.e. the train terminates -> arrival.
             # (The worker's httpx fills departure_time even at a terminus, so time presence
             # can't be used; pickup_type is the reliable GTFS signal and survives as an int.)

@@ -9,6 +9,15 @@ function Platform({ row }) {
   if (row.confirmed_track) {
     return <b style={{ color: 'var(--green)' }}>Plat {row.confirmed_track}</b>
   }
+  // Timetabled platform (outlying multi-track stations carry it in the schedule) —
+  // authoritative, so it outranks our statistical prediction.
+  if (row.scheduled_track) {
+    return (
+      <span style={{ color: 'var(--muted)' }}>
+        Plat {row.scheduled_track} <span className="meta">sched</span>
+      </span>
+    )
+  }
   if (row.prediction) {
     const p = row.prediction
     // Low modal confidence -> show the contiguous platform range that covers most history.
@@ -149,7 +158,7 @@ export default function StationsView() {
       </label>
       <div className="hint" style={{ marginTop: 10 }}>
         Platform: <b style={{ color: 'var(--green)' }}>green = confirmed</b> by the board ·
-        <span style={{ color: 'var(--muted)' }}> grey = our prediction (confidence · sample size)</span>.
+        <span style={{ color: 'var(--muted)' }}> grey = timetabled (sched) or our prediction (confidence · sample size)</span>.
       </div>
       {err && <div className="empty err">{err}</div>}
       <Alerts items={board.alerts} />
