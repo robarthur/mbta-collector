@@ -39,3 +39,10 @@ export function fmtTime(iso) {
   try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
   catch { return iso }
 }
+
+export const EFFECT_LABEL = {
+  CANCELLATION: 'Cancelled', NO_SERVICE: 'No service', TRACK_CHANGE: 'Track change',
+  DELAY: 'Delayed', SUSPENSION: 'Suspended', SHUTTLE: 'Shuttle', DETOUR: 'Detour',
+  SCHEDULE_CHANGE: 'Schedule change', SERVICE_CHANGE: 'Service change',
+  STATION_ISSUE: 'Station issue', SNOW_ROUTE: 'Snow route',
+}

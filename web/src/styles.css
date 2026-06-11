@@ -98,3 +98,13 @@ th { color:var(--muted); font-weight:600; font-size:12px; text-transform:upperca
 }
 .bell:hover { opacity: .7; }
 .bell.on { opacity: 1; filter: none; }
+
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 30px; margin: 6px 0; }
+.spark b { width: 14px; min-height: 3px; border-radius: 2px 2px 0 0; display: block; }
+.rowx { cursor: pointer; }
+.rowx:hover td { background: rgba(255,255,255,.04); }
+tr.detail td { background: rgba(255,255,255,.02); }
+.alert-badge {
+  background: rgba(217,154,30,.15); border: 1px solid rgba(217,154,30,.4);
+  color: var(--amber); border-radius: 999px; padding: 1px 8px; font-size: 12px; white-space: nowrap;
+}

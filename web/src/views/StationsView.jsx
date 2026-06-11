@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api, LINE_COLORS, shortLine, delayColor, fmtDelay, fmtTime } from '../api'
+import { api, LINE_COLORS, shortLine, delayColor, fmtDelay, fmtTime, EFFECT_LABEL } from '../api'
 import StationPicker from '../StationPicker.jsx'
 import { supported as notifySupported, isWatched, addWatch, removeWatch, requestPermission, checkBoard } from '../watches'
 
@@ -44,11 +44,6 @@ function Platform({ row }) {
     )
   }
   return <span className="meta">—</span>
-}
-
-const EFFECT_LABEL = {
-  CANCELLATION: 'Cancelled', NO_SERVICE: 'No service', TRACK_CHANGE: 'Track change',
-  DELAY: 'Delayed', SUSPENSION: 'Suspended', SHUTTLE: 'Shuttle', DETOUR: 'Detour',
 }
 
 // Per-row status: an alert on this train wins (Cancelled/Track change/…), else delay/feed text.

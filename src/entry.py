@@ -537,6 +537,13 @@ class Default(WorkerEntrypoint):
                 "by_hour_et": _rows(await db.prepare(sql.HISTORY_BY_HOUR).all()),
             })
 
+        if path == "/alerts":
+            api_key = env_get(self.env, "MBTA_API_KEY")
+            items = mbta.parse_alerts(await mbta.fetch_alerts(api_key))["items"]
+            out = [{**it, "tier": "info" if it["effect"] in ALERT_INFO_EFFECTS else "urgent"}
+                   for it in items if it["effect"] in ALERT_BANNER_EFFECTS]
+            return _json({"alerts": out}, max_age=60)
+
         if path == "/backtest":
             return _json(await self._backtest(db), max_age=3600)
 
