@@ -121,6 +121,10 @@ def parse_vehicles(payload):
             "route_pattern_id": ti.get("route_pattern_id"),
             "route_id": _rel_id(rel, "route"),
             "direction_id": ti.get("direction_id"),
+            "latitude": a.get("latitude"),
+            "longitude": a.get("longitude"),
+            "bearing": a.get("bearing"),
+            "updated_at": a.get("updated_at"),
         })
     return out
 

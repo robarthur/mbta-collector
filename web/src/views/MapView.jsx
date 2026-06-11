@@ -20,16 +20,17 @@ export default function MapView() {
     let active = true
     const load = async () => {
       try {
-        const d = await api('/trains' + (line ? `?route=${encodeURIComponent(line)}` : ''))
+        const d = await api('/live-trains')   // seconds-fresh positions; delay joined server-side
         if (active) { setTrains(d.trains || []); setErr(null) }
       } catch { if (active) setErr('failed to load trains') }
     }
     load()
-    const t = setInterval(load, 30000)
+    const t = setInterval(load, 15000)
     return () => { active = false; clearInterval(t) }
-  }, [line])
+  }, [])
 
-  const shown = trains.filter((t) => t.latitude != null && t.longitude != null)
+  const shown = trains.filter((t) =>
+    t.latitude != null && t.longitude != null && (!line || t.route_id === line))
 
   return (
     <div className="wrap">
@@ -50,7 +51,7 @@ export default function MapView() {
               pathOptions={{ color: c, fillColor: c, fillOpacity: 0.9, weight: 1 }}>
               <Popup>
                 <b>{shortLine(t.route_id)} {t.trip_name}</b><br />
-                Est delay: <b style={{ color: c }}>{fmtDelay(t.delay_s)}</b><br />
+                Est delay: <b style={{ color: c }}>{t.delay_s != null ? fmtDelay(t.delay_s) : '—'}</b><br />
                 Reported: {t.reported_status || '—'}<br />
                 {t.current_status}<br />→ {t.next_stop_id || '?'}
               </Popup>

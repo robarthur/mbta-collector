@@ -376,6 +376,27 @@ class Default(WorkerEntrypoint):
                 "by_line": _rows(await db.prepare(sql.DELAYS_BY_LINE).all()),
             })
 
+        if path == "/live-trains":
+            # Real-time positions straight from the vehicles feed (seconds-fresh), with
+            # delay/status joined from the latest 2-min train_status snapshot.
+            api_key = env_get(self.env, "MBTA_API_KEY")
+            vehicles = mbta.parse_vehicles(await mbta.fetch_vehicles(api_key))
+            rows = _rows(await db.prepare(sql.TRAINS_LATEST).all())
+            by_trip = {r["trip_id"]: r for r in rows if r.get("trip_id")}
+            by_name = {r["trip_name"]: r for r in rows if r.get("trip_name")}
+            out = []
+            for v in vehicles:
+                # JsNull-safe presence check: real coordinates are numbers.
+                if not isinstance(v.get("latitude"), (int, float)):
+                    continue
+                s = by_trip.get(v.get("trip_id")) or by_name.get(v.get("trip_name")) or {}
+                out.append({**v,
+                            "delay_s": s.get("delay_s"),
+                            "reported_status": s.get("reported_status"),
+                            "next_stop_id": s.get("next_stop_id") or v.get("stop_id"),
+                            "predicted_time": s.get("predicted_time")})
+            return _json({"trains": out}, max_age=10)
+
         if path == "/trains":
             route = (query.get("route") or [None])[0]
             if route:

@@ -175,7 +175,7 @@ DELAYS_BY_LINE = (
 
 # All trains in the latest snapshot (optionally one route): position + delay + status.
 TRAINS_LATEST = (
-    "SELECT route_id, route_pattern_id, trip_name, direction_id, next_stop_id, "
+    "SELECT trip_id, route_id, route_pattern_id, trip_name, direction_id, next_stop_id, "
     "delay_s, current_status, reported_status, latitude, longitude, predicted_time "
     "FROM train_status WHERE snapshot_ts=(SELECT MAX(snapshot_ts) FROM train_status) "
     "ORDER BY route_id, delay_s DESC"
