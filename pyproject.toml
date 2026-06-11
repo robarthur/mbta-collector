@@ -13,3 +13,6 @@ dev = [
     "workers-py",
     "workers-runtime-sdk",
 ]
+test = [
+    "pytest",
+]
