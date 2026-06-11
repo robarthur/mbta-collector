@@ -300,6 +300,17 @@ class Default(WorkerEntrypoint):
         await self._collector().arm()
 
     async def fetch(self, request):
+        # Top-level guard: an uncaught route exception otherwise escapes as the runtime's
+        # bare 500 with NO CORS headers, which the browser reports as a baffling CORS
+        # failure. Return a CORS'd JSON error instead so the app degrades gracefully.
+        try:
+            return await self._route(request)
+        except Exception as e:
+            return Response(json.dumps({"error": repr(e)[:200]}), status=502,
+                            headers={"content-type": "application/json; charset=UTF-8",
+                                     "cache-control": "no-store", **CORS})
+
+    async def _route(self, request):
         if getattr(request, "method", "GET") == "OPTIONS":
             return Response("", headers=CORS)
 
@@ -395,7 +406,7 @@ class Default(WorkerEntrypoint):
                             "reported_status": s.get("reported_status"),
                             "next_stop_id": s.get("next_stop_id") or v.get("stop_id"),
                             "predicted_time": s.get("predicted_time")})
-            return _json({"trains": out}, max_age=10)
+            return _json({"trains": out}, max_age=5)
 
         if path == "/trains":
             route = (query.get("route") or [None])[0]
