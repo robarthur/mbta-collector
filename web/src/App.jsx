@@ -5,7 +5,7 @@ import MapView from './views/MapView.jsx'
 import StationsView from './views/StationsView.jsx'
 import LinesView from './views/LinesView.jsx'
 import PlatformsView from './views/PlatformsView.jsx'
-import ReloadPrompt from './ReloadPrompt.jsx'
+import SWUpdate from './SWUpdate.jsx'
 import { supported as notifySupported, getWatches, checkAll } from './watches'
 
 export default function App() {
@@ -51,7 +51,7 @@ export default function App() {
         <Route path="/platforms" element={<PlatformsView />} />
         <Route path="*" element={<Navigate to="/map" replace />} />
       </Routes>
-      <ReloadPrompt />
+      <SWUpdate />
     </>
   )
 }
