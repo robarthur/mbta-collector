@@ -1,97 +1,90 @@
 # estimated-platform
 
-A data collector for studying **which platform (track) Commuter Rail trains arrive at**
-at MBTA multi-platform stations. Collects three stations each poll:
+An MBTA Commuter Rail web app with a predictive edge: live departure boards that show the
+**platform before the official board posts it**, plus system-wide delays, line reliability,
+and train-watch notifications. Runs entirely on Cloudflare (free tier).
 
-| Key | Station | Tracks | Character |
-|-----|---------|--------|-----------|
-| `north` | North Station (`place-north`) | 10 | Stub-end terminal — dynamic, late track assignment |
-| `south` | South Station (`place-sstat`) | 13 | Stub-end terminal — dynamic, late track assignment |
-| `backbay` | Back Bay (`place-bbsta`) | 5 (two stop families) | Through-station — track largely from schedule (contrast) |
+**App:** https://estimated-platform.pages.dev · **API:** https://estimated-platform.robarthur1.workers.dev/api/v1
 
-Tracks are resolved per station from the API's child-stop → `platform_code` map, so Back
-Bay's mixed `NEC-2276-*` / `WML-0012-*` platforms are handled the same as a single-family
-station.
+## What it does
 
-## Why this exists
+- **Station boards** (`/stations`) — Realtime-Trains-style departures + arrivals for all
+  148 CR stations (search picker). Platform column: **green = confirmed** by the official
+  feed, grey = **timetabled** (outlying multi-track stations carry the track in the
+  schedule) or **our prediction** (with honest confidence and sample size; widens to a
+  platform *range* like "Plat 1–5 ~83%" when no single track is likely enough).
+- **Watch a train** — tap the bell on a departure; get an OS notification the moment its
+  platform posts (or it goes >5 min late / is cancelled) while the app is open.
+- **Alerts** — service alerts on the board: urgent (delay/cancellation/track change) inline,
+  long-running notices collapsed; train-specific alerts tag their row only.
+- **Line reliability** (`/lines`) — lines ranked by on-time %, per-day trend, and the active
+  alerts that explain the numbers (e.g. Newburyport's 57% next to its trackwork notice).
+- **Live map** (`/map`) — positions colored by delay (~2 min freshness).
 
-Arriving CR trains carry **no track** in any public MBTA feed — the track only appears
-at/just-before departure (verified: arrivals sit on the generic stop `BNT-0000`, only a
-departing train shows `BNT-0000-0x`). There is no public switch/signal state and no
-published historical CR track-assignment dataset. So predicting the arrival platform
-*early* can only be a probabilistic model trained on data we collect ourselves.
+## Why the platform prediction exists (the interesting part)
 
-This service is that collector. It logs North Station CR predictions + vehicle movement
-every ~15s, records the exact moment each train's track becomes known (with lead time),
-tracks live platform occupancy, and reports per-route track bias + lead-time stats. Those
-numbers tell us whether an early predictor is even worth building.
+At North/South Station the track is assigned by dispatch only **~8 minutes before
+departure** — it exists in *no* public feed before that (the schedule deliberately excludes
+track ids for these two terminals; we verified the vehicle feed reveals nothing earlier).
+There is also **no public historical record** of CR track assignments. So this project runs
+its own collector (every 15s since June 2026) and predicts platforms from the accumulated
+history with a train→branch→line hierarchical-shrinkage model.
 
-## Architecture (fully Python on Cloudflare)
+Honest accuracy (leave-one-day-out, `/api/v1/backtest`): **Back Bay ~99%** (scheduled),
+**South ~40%**, **North ~25%** (its assignments are genuinely dynamic — the displayed
+confidence is calibrated, so a "~60%" call really hits ~60%). The collected dataset itself
+is the moat: it exists nowhere else.
 
-- **`Collector` Durable Object** (`src/entry.py`) — owns the ~15s poll loop via its
-  `alarm()`: fetch MBTA → parse → write D1 → reschedule itself. Self-sustaining.
-- **`Default` Worker** (`src/entry.py`) — HTTP endpoints (read D1) + keeps the alarm armed.
-- **D1** — durable SQLite store (`schema.sql`), bound as `DB`.
-- **Cron trigger (1/min)** — backstop that re-arms the alarm if the loop ever stops.
+## Architecture
 
-Pure logic lives in `src/mbta.py` (API client + parsing), `src/sql.py`, `src/timeutil.py`.
-
-## Endpoints
-
-| Route | What |
-|-------|------|
-| `GET /health` | row counts + last poll time + events per station |
-| `GET /board?station=north\|south\|backbay` | live occupancy grid + inbound trains (track known? yes/no); default `north` |
-| `GET /analyze` | per-station/route track distribution + lead-time summary per station |
-| `GET /poll-once` | force one poll of every station now (debug) |
-
-## Local development
-
-Python Workers must be driven through **`pywrangler`** (from the `workers-py` dev
-dependency), which vendors the `pyproject.toml` dependencies (`httpx`) into the worker
-bundle before proxying to `wrangler`. Plain `npx wrangler dev` will fail with
-`ModuleNotFoundError: httpx`.
-
-```bash
-npm install                       # gets wrangler (CLI)
-uv sync                           # python deps + pywrangler tooling
-
-# create + seed a LOCAL D1 (d1 execute needs no bundling, so npx wrangler is fine)
-npx wrangler d1 execute estimated-platform --local --file schema.sql
-
-uv run pywrangler dev             # runs the Python Worker + DO + local D1
-# then:  curl localhost:8787/poll-once   and   curl localhost:8787/board
+```
+Pages (React PWA, web/)  ──fetch──▶  Worker /api/v1/* (Python, src/entry.py)
+                                       ├─ live proxies: /station /stops /alerts (MBTA V3)
+                                       ├─ D1 reads: /trains /delays /history /predict /backtest …
+                                       └─ Collector DurableObject: 15s alarm loop
+                                            fetch MBTA → detect track resolutions → D1
+                                          (cron 1/min re-arms; /health reports staleness)
 ```
 
-Inspect collected data:
+- **Worker** (Python Workers beta / Pyodide, driven via `pywrangler` — bare `wrangler dev`
+  fails to bundle `httpx`). Modules: `entry.py` (DO + routes), `mbta.py` (V3 client +
+  parsers), `predictor.py` (pure, tested), `sql.py`, `timeutil.py`.
+- **D1** stores polls, track-resolution events, berth/board milestones, vehicle arrivals,
+  and 2-minute system-wide train status snapshots (~62k rows/day, inside the free tier).
+- **Web** (`web/`): React + Vite PWA on Cloudflare Pages; silent auto-update; installable.
+
+See `ARCHITECTURE.md` for the full reference (schema, feeds, endpoints, caveats).
+
+## Development
 
 ```bash
-npx wrangler d1 execute estimated-platform --local \
-  --command "select * from track_events"
+# Worker
+uv sync
+npx wrangler d1 execute estimated-platform --local --file schema.sql
+uv run pywrangler dev                 # localhost:8787
+
+# Tests (parsers against captured payloads + predictor math)
+uv run --group test pytest
+
+# Web app
+cd web && npm install && npm run dev  # talks to prod API via .env.development
 ```
 
 ## Deploy
 
 ```bash
-npx wrangler d1 create estimated-platform        # paste the database_id into wrangler.jsonc
-npx wrangler d1 execute estimated-platform --remote --file schema.sql
-uv run pywrangler deploy                          # bundles httpx, then deploys
-npx wrangler secret put MBTA_API_KEY             # optional; raises rate limit to ~1000/min
+rm -rf .wrangler && uv run pywrangler deploy            # Worker (clear stale build cache)
+cd web && npm run build && cd ..
+npx wrangler pages deploy web/dist --project-name=estimated-platform --branch=main
+./scripts/backup-d1.sh                                  # weekly: the data is irreplaceable
 ```
 
-Once deployed, the DO alarm self-sustains the ~15s loop; the cron backstop re-arms it.
+## Pyodide gotchas (hard-won, do not relearn)
 
-## Notes / caveats
-
-- Runs on the **beta** Python Workers runtime (Pyodide = CPython compiled to WASM,
-  running inside the JS isolate). Deps: `httpx` only.
-- Pyodide gotcha baked into `_bound()` (`src/entry.py`): Python `None` crosses into JS as
-  `undefined`, which D1 rejects. Params are JSON-encoded in Python and `JSON.parse`d in JS
-  so `null` survives. (`run_js`/`eval` is unavailable — workerd forbids code-gen.)
-- With 3 stations, each 15s poll makes ~3 prediction requests (~12/min). That's near the
-  keyless public limit (~20/min), so set `MBTA_API_KEY` for headroom (raises to ~1000/min).
-  Track maps are fetched once per station and cached in the Durable Object.
-- Cost: D1 + Workers + DO alarms are request/alarm-billed (no always-on compute).
-- Expected early finding from `/analyze`: lead-to-arrival clusters near zero/negative —
-  i.e. the official feed reveals the track only as the train arrives. That's the gap a
-  predictor would try to beat.
+- Python `None` → JS `undefined`, which D1 rejects: params are JSON-round-tripped
+  (`_bound()` in `entry.py`).
+- The worker's vendored httpx leaves JSON `null` as a **JsNull proxy** (`is None` is False,
+  falsy-but-not-None) and **fills `departure_time` even at termini** — terminus/through
+  classification must use GTFS `pickup_type`, and presence checks must be
+  `isinstance(x, str)`. CPython tests can't catch this class; verify in the deployed Worker.
+- `getAlarm()` returns falsy JS null; `scheduled()` must take `*args`; always `await setAlarm`.

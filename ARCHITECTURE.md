@@ -3,12 +3,14 @@
 An MBTA Commuter Rail webapp + data collector running entirely on Cloudflare. It does three
 things:
 
-1. **Live** — system-wide train positions and delays, by line.
-2. **Historical performance** — on-time performance and delay trends over time.
-3. **Predicted platforms** — which track an arriving train will use, before the board posts it.
+1. **Live** — station departure/arrival boards, system-wide positions and delays, alerts.
+2. **Historical performance** — line reliability (OTP ranking, daily trends) + delay curves.
+3. **Predicted platforms** — which track a departure will use, before the board posts it
+   (calibrated confidence; honest accuracy via a leave-one-out backtest).
 
-Live at **https://estimated-platform.robarthur1.workers.dev/** · repo `robarthur/mbta-collector`
-(branch `poc-collector`).
+App **https://estimated-platform.pages.dev** (React PWA on Pages) · API
+**https://estimated-platform.robarthur1.workers.dev/api/v1** (Worker root 302s to the app) ·
+repo `robarthur/mbta-collector` (branch `main`).
 
 ---
 
@@ -20,30 +22,34 @@ Live at **https://estimated-platform.robarthur1.workers.dev/** · repo `robarthu
 - **Durable Object** `Collector` (Python) — owns the poll loop via the Alarms API.
 - **D1** (serverless SQLite) — durable store, bound as `env.DB`.
 - **Cron trigger** (`*/1 * * * *`) — backstop that re-arms the DO alarm if it stalls.
-- **Frontend** — one self-contained HTML/CSS/JS string (`src/ui.py`), Leaflet via CDN, no build.
+- **Frontend** — React + Vite PWA (`web/`) on **Cloudflare Pages**; talks to the Worker
+  cross-origin via `VITE_API_BASE`. Silent auto-update SW; installable (icons set).
 
 ```
-Internet ─▶ Default (WorkerEntrypoint, src/entry.py)         Cron (1/min)
-              ├─ GET / /ui            → HTML SPA (ui.PAGE)      └─ scheduled() → Collector.arm()
-              ├─ GET /health /board /trains /delays …→ read env.DB (D1)
-              └─ arms Collector alarm on each request
-                              │ DO RPC
-                              ▼
-            Collector (DurableObject)  ── alarm() every ~15s:
-              fetch MBTA V3 (httpx) → parse → write D1 (batched) → reschedule alarm
+Pages (web/ React PWA) ──fetch /api/v1/*──▶ Default (WorkerEntrypoint, src/entry.py)
+                                              ├─ GET / /ui → 302 to the Pages app   Cron (1/min)
+                                              ├─ live MBTA proxies: /station /stops /alerts
+                                              ├─ D1 reads: /health /trains /delays /history …
+                                              └─ arms Collector alarm on each request │ scheduled()
+                                                              │ DO RPC                ▼
+                                            Collector (DurableObject) ── alarm() every ~15s:
+                                              fetch MBTA V3 (httpx) → parse → write D1 → reschedule
 ```
 
-### Files (`src/`)
-| File | Lines | Role |
-|---|---|---|
-| `entry.py` | ~446 | `Collector` DO (poll loop) + `Default` worker (all HTTP routes) |
-| `mbta.py` | ~279 | MBTA V3 client + parsing (feeds, track resolution, delay reduction) |
-| `sql.py` | ~238 | All SQL statements (inserts + read queries) |
-| `timeutil.py` | ~60 | `service_date` (America/NY, 3am rollover), `lead_seconds`, ms/iso helpers |
-| `ui.py` | ~266 | `PAGE` — the 3-view SPA |
+### Files
+| File | Role |
+|---|---|
+| `src/entry.py` | `Collector` DO (poll loop, status) + `Default` worker (all HTTP routes, backtest) |
+| `src/mbta.py` | MBTA V3 client + parsing (boards, schedules, alerts, vehicles, delay reduction) |
+| `src/predictor.py` | hierarchical-shrinkage platform predictor (pure Python, unit-tested) |
+| `src/sql.py` | All SQL statements (inserts + read queries) |
+| `src/timeutil.py` | `service_date` (America/NY, 3am rollover), `lead_seconds`, Eastern helpers |
+| `web/src/` | React app: `views/` (Map, Stations, Lines, Platforms), `watches.js` (notify), `api.js` |
+| `tests/` | pytest suite: captured-payload parser fixtures + predictor/timeutil units |
 
 `schema.sql` = full DDL (local dev). `migrations/00N_*.sql` = additive migrations applied to
 the live D1 in order (001→006). `wrangler.jsonc` = Worker/D1/DO/cron config.
+`scripts/backup-d1.sh` = weekly D1 export (the dataset is irreplaceable).
 
 ---
 
@@ -57,6 +63,10 @@ the live D1 in order (001→006). `wrangler.jsonc` = Worker/D1/DO/cron config.
 | `/predictions?filter[stop]={station}&filter[route_type]=2&include=vehicle,trip` | every ~15s, per station (north/south/backbay) | platform board: arrivals/departures + vehicle position/status + trip (name, branch) |
 | `/vehicles?filter[route_type]=2&include=trip` | every ~15s | all CR train positions continuously (catches berthing the predictions feed misses) |
 | `/predictions?filter[route]={13 CR routes}&include=schedule,vehicle,trip` | every ~2 min (snapshot) | system-wide delay: predicted vs **scheduled** times + position, all lines |
+| `/predictions?filter[stop]=X&include=schedule,trip,route,stop` | on `/station` request | live board: predicted times + **confirmed platform** (`platform_code` of the prediction's stop) |
+| `/schedules?filter[stop]=X&include=trip,route,stop` | on `/station` request | timetable spine (boards never go blank) + `pickup_type` classification + **scheduled track** at outlying stations |
+| `/alerts?filter[route_type]=2&datetime=now` | on `/station` & `/alerts` requests | service alerts: banner (route/stop match) + per-train tags (trip-id suffix = train number) |
+| `/stops?filter[route_type]=2&include=parent_station` | on `/stops` request (cached 1h) | the 148-station picker |
 
 **V3 vs GTFS-realtime:** V3 is MBTA's JSON:API layer over the same source as GTFS-rt
 (`/predictions` ≈ TripUpdates, `/vehicles` ≈ VehiclePositions). We use V3 for its filtering +
@@ -130,10 +140,17 @@ indexes · 003 milestones · 004 vehicle_arrivals (+`vehicle_id` on milestones) 
 
 ## 5. HTTP endpoints (all `GET`, JSON unless noted)
 
+All JSON routes are served at both `/api/v1/<x>` (canonical) and `/<x>` (legacy alias),
+with CORS for the Pages app.
+
 | Route | Returns |
 |---|---|
-| `/` , `/ui` | the HTML SPA (`text/html`) |
-| `/health` | `{status, snapshots, track_events, last_poll_ts, events_by_station[]}` |
+| `/` , `/ui` | **302 redirect** to the Pages app |
+| `/health` | `{status: ok\|stale, seconds_since_poll, loop:{last_poll_ms,next_alarm_ms,last_error}, snapshots, track_events, events_by_station[]}` — honest staleness (>120s = stale) |
+| `/station?stop=` | the station board: `{departures[], arrivals[], alerts[]}` — schedule spine merged with live predictions; per-row `confirmed_track` / `scheduled_track` / `prediction{}` / `delay_s` / `alert_effect`. 3 concurrent MBTA calls |
+| `/stops` | the 148 CR parent stations (picker), cached 1h |
+| `/alerts` | active CR alerts, tier-tagged (`urgent`/`info`) |
+| `/backtest` | leave-one-out predictor evaluation: LOO vs in-sample hit-rate, calibration table, range coverage, per-train consistency |
 | `/poll-once` | forces one poll (debug); `{poll_id, ts, snapshot, stations:{key:{observations,events_seen,occupancy}}}` |
 | `/board?station=` | `{station, name, poll, occupancy:{track:occupant|null}, inbound:[{trip,route,vehicle,arrival_time,status,track,track_known,via}]}` |
 | `/predict?station=` | `{station, name, inbound:[{trip_name,route,branch,arrival_time,status,actual_track,track_known, prediction:{predicted_track,confidence,alternatives[],basis,n_samples}}]}` |
@@ -157,28 +174,40 @@ Param `station` defaults to `north`. Endpoints read D1 directly (no DO call) exc
 - **Delay** (`train_status.delay_s`): `predicted − scheduled` at the train's next stop, from
   `/predictions?…&include=schedule`. **Forecast, not measured actual.** `reported_status` is
   the feed's qualitative status ("Delayed"/"On time"); we show Estimated vs Reported.
-- **Platform prediction** (`/predict`): historical distribution of `resolved_track` for the
-  train's **branch** (`route_pattern_id`, if ≥5 samples) else **line** (`route_id`); returns
-  top track + confidence + alternatives. *Currently line-level in practice* — inbound trains
-  carry the `-1` branch variant while history is keyed to the outbound `-0` branch, so it backs
-  off to line. Branch-level needs an inbound→outbound mapping (planned).
-- **Berth-vs-board lead** (`/turn-lead`): how much earlier the trainset reveals the platform
-  than the board. Finding so far: ~0 at North (trains aren't seen on a numbered platform as the
-  inbound service; the track is born with the departure).
+- **Platform prediction** (`src/predictor.py`): **hierarchical shrinkage** — the train
+  number's track counts are smoothed toward its branch distribution, which is smoothed
+  toward the line (k=4 pseudocounts each). Confidence = smoothed modal probability
+  (calibrated: a displayed ~60% really hits ~60% out-of-sample). Below 60% modal, returns a
+  contiguous platform `range` covering ~80% of history ("Plat 1–5 ~83%"). `/backtest`
+  validates the exact same code leave-one-out.
+- **Departures vs arrivals** (`/station`): a train **terminates** at a stop when its
+  schedule row has `pickup_type == 1` (time-presence is unusable — see Pyodide caveats);
+  predictions self-classify by departure-time presence, schedule overrides by trip-id with
+  a train-number fallback for late/added trips.
+- **Berth-vs-board lead** (`/turn-lead` + per-trip join): the berthed set is tagged with its
+  outbound trip and sits on the correct track (100% match), but the public feed attaches the
+  track only **~8 min before departure** — same time as the board. Measured: no early lead
+  exists in public data at the terminals; the track is "born with the departure."
 
 ---
 
-## 7. Frontend (`src/ui.py`, served at `/`)
+## 7. Frontend (`web/`, React + Vite PWA on Cloudflare Pages)
 
-One `PAGE` string, vanilla JS, Leaflet (CDN), dark theme. Top-level views:
-- **Map** — Leaflet + OSM; markers from `/trains` colored by delay; per-line filter chips;
-  popups show **Est delay** vs **Reported** status + next stop. Auto-refresh ~30s.
-- **Lines** — `/delays` (current) + `/history` (`by_route` OTP bars, `by_hour_et` delay curve).
-- **Platforms** — station tabs; occupancy grid (`/board`); inbound table with **Predicted**
-  column (`/predict`); recent resolutions (`/events`); a static zone hint per station.
+Views (react-router; station deep-linkable via `/stations?stop=`):
+- **Stations** — the flagship board: Departures (schedule-backed, both directions at
+  through-stations) + Arrivals (terminating trains). Platform cell: green confirmed →
+  grey timetabled (`scheduled_track`) → grey prediction (confidence · n, or a range).
+  Alert banner (urgent inline, info collapsed) + per-row alert tags. **Watch bell** per
+  departure → one-shot OS notifications via the SW (`watches.js`, localStorage,
+  self-expiring; app-level 30s loop so watches fire from any view).
+- **Lines** — reliability ranking (OTP color bars best→worst), expandable per-line daily
+  trend sparkline + the line's active alerts; system delay-by-hour.
+- **Map** — react-leaflet, markers colored by delay (~2-min fresh from `train_status`;
+  a real-time `/live-trains` proxy remains a noted enhancement).
+- **Platforms** — occupancy grid (`/board`), predictions (`/predict`), recent resolutions.
 
-Positions are ~2-min fresh (from D1 `train_status`). A real-time `/live-trains` proxy of the
-vehicles feed is a noted future enhancement.
+PWA: `vite-plugin-pwa`, `registerType: autoUpdate` + 60s SW update poll (silent updates);
+icons in `web/public/`. Deploys to Pages (`_redirects` SPA fallback); `VITE_API_BASE` per env.
 
 ---
 
@@ -192,9 +221,17 @@ uv sync                                        # python deps + pywrangler
 npx wrangler d1 execute estimated-platform --local --file schema.sql
 uv run pywrangler dev                          # http://localhost:8787
 
+# TESTS
+uv run --group test pytest                     # parser fixtures + predictor/timeutil units
+
 # DEPLOY
 wrangler d1 execute estimated-platform --remote --file migrations/00N_*.sql   # new migration
-rm -rf .wrangler && uv run pywrangler deploy   # clear cache to avoid stale bundles
+rm -rf .wrangler && uv run pywrangler deploy   # Worker (clear cache to avoid stale bundles)
+cd web && npm run build && cd .. && \
+  npx wrangler pages deploy web/dist --project-name=estimated-platform --branch=main  # app
+
+# BACKUP (weekly — the collected data exists nowhere else)
+./scripts/backup-d1.sh
 ```
 
 **Footguns:**
@@ -202,6 +239,10 @@ rm -rf .wrangler && uv run pywrangler deploy   # clear cache to avoid stale bund
 - Use `uv run pywrangler`, not `npx wrangler`, for dev/deploy (Python bundling).
 - Pyodide `None` → JS `undefined`, which D1 rejects; we bind params via `JSON.parse` so `null`
   survives (`_bound` in `entry.py`). `run_js`/`eval` is forbidden by workerd CSP.
+- The worker's vendored httpx leaves JSON `null` as a **JsNull proxy** (`is None` is False)
+  and fills schedule `departure_time` even at termini. Use `isinstance(x, str)` for presence
+  and `pickup_type` for terminus classification. CPython tests pass where Pyodide differs —
+  always verify behaviour against the deployed Worker.
 
 ---
 
@@ -211,8 +252,15 @@ rm -rf .wrangler && uv run pywrangler deploy   # clear cache to avoid stale bund
   events/milestones). Decoupled cadence (2-min snapshots) keeps us under; watch if adding writes.
 - **Beta runtime**: Python Workers + Pyodide; package subset (httpx ok, no pandas/native).
 - **Delay is predicted, not actual** (no recorded arrival times; could add, or use MBTA LAMP).
-- **Predicted platforms**: South is genuinely predictable (e.g. Fairmount→10 ~66–71%); **North
-  exact track is not** (dispatcher/yard discretion; only the east/west *zone* is reliable —
-  Eastern Route → tracks 1–5, Fitchburg/Lowell → 6–10). ~4 days of priors so far.
-- **Switch/interlocking/yard state is not public** — the arrival platform isn't in any feed
-  before the departure is set up; that's the core limit the whole project ran into.
+- **Predicted platforms — measured (leave-one-out, ~10 days of priors)**: Back Bay ~99%
+  (scheduled, trivial), South ~40%, **North ~25%** — North's assignment is genuinely
+  dynamic (1 of 93 trains is ≥80% track-consistent); only the east/west *zone* is reliable
+  there (Eastern Route → 1–5, Fitchburg/Lowell → 6–10), which the range display captures.
+  Displayed confidence is calibrated (shrinkage), and `/backtest` re-measures as data grows.
+- **The track is assigned ~8 min before departure** at North/South and enters the public
+  feed only then (board, prediction stop, and vehicle stop all at once). The schedule
+  deliberately excludes track ids for these terminals (outlying multi-track stations carry
+  them since May 2023). There is **no public historical CR track dataset** — ours (D1,
+  backed up weekly) is the unique asset.
+- **Switch/interlocking/yard state is not public** — nothing in any feed reveals the
+  platform earlier; that's the structural limit the whole project mapped out.
