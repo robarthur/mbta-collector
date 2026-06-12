@@ -7,7 +7,10 @@ mbta.py) -- treat tests as covering logic, not runtime quirks.
 
 PREDICT_SINGLE_MIN = 60     # at/above this modal confidence we show a single platform
 PREDICT_RANGE_COVERAGE = 80  # else widen to the platforms covering this cumulative share
-SHRINK_K = 4.0               # pseudocount strength for hierarchical shrinkage train<-branch<-line
+# Pseudocount strength for hierarchical shrinkage train<-branch<-line. Chosen by LOO sweep
+# (2026-06-12, n=2718): k=12 beat k=4 on hit-rate (53.8 vs 52.4), range coverage (82.7 vs
+# 75.3 against the 80 target) and mid-band calibration error (3.2 vs 10.2) simultaneously.
+SHRINK_K = 12.0
 
 
 def _track_key(t):
