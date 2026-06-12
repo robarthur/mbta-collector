@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet'
 import { api, LINE_COLORS, shortLine, delayColor, fmtDelay } from '../api'
+import { useAnimatedMarkers } from '../useAnimatedMarkers'
 
 const POLL_MS = 10000   // fetch fresh positions every 10s
 const SNAP_M = 5000     // teleport (don't glide) beyond this — data corrections, tunnel GPS
@@ -33,7 +34,11 @@ export default function MapView() {
   const [line, setLine] = useState(null)
   const [err, setErr] = useState(null)
   const tweens = useRef(new Map())   // vehicle_id -> {from, to, start}
-  const markers = useRef(new Map())  // vehicle_id -> leaflet layer (for imperative setLatLng)
+  const registerRef = useAnimatedMarkers((now) => {
+    const pos = new Map()
+    for (const [id, tw] of tweens.current) pos.set(id, curPos(tw, now))
+    return pos
+  })
 
   useEffect(() => {
     let active = true
@@ -65,21 +70,6 @@ export default function MapView() {
     return () => { active = false; clearInterval(t) }
   }, [])
 
-  // One rAF loop slides every marker imperatively — no React re-render per frame.
-  useEffect(() => {
-    let raf
-    const step = () => {
-      const now = performance.now()
-      for (const [id, tw] of tweens.current) {
-        const m = markers.current.get(id)
-        if (m) m.setLatLng(curPos(tw, now))
-      }
-      raf = requestAnimationFrame(step)
-    }
-    raf = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(raf)
-  }, [])
-
   const shown = trains.filter((t) =>
     t.latitude != null && t.longitude != null && (!line || t.route_id === line))
 
@@ -101,10 +91,7 @@ export default function MapView() {
           return (
             <CircleMarker key={t.vehicle_id}
               center={tw ? curPos(tw, performance.now()) : [t.latitude, t.longitude]}
-              ref={(m) => {
-                if (m) markers.current.set(t.vehicle_id, m)
-                else markers.current.delete(t.vehicle_id)
-              }}
+              ref={registerRef(t.vehicle_id)}
               radius={6} pathOptions={{ color: c, fillColor: c, fillOpacity: 0.9, weight: 1 }}>
               <Popup>
                 <b>{shortLine(t.route_id)} {t.trip_name}</b><br />

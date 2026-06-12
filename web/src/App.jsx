@@ -5,6 +5,7 @@ import MapView from './views/MapView.jsx'
 import StationsView from './views/StationsView.jsx'
 import LinesView from './views/LinesView.jsx'
 import PlatformsView from './views/PlatformsView.jsx'
+import ReplayView from './views/ReplayView.jsx'
 import SWUpdate from './SWUpdate.jsx'
 import { supported as notifySupported, getWatches, checkAll } from './watches'
 
@@ -40,6 +41,7 @@ export default function App() {
           <NavLink to="/map">Map</NavLink>
           <NavLink to="/stations">Stations</NavLink>
           <NavLink to="/lines">Lines</NavLink>
+          <NavLink to="/replay">Replay</NavLink>
           <NavLink to="/platforms">Platforms</NavLink>
         </nav>
       </header>
@@ -48,6 +50,7 @@ export default function App() {
         <Route path="/map" element={<MapView />} />
         <Route path="/stations" element={<StationsView />} />
         <Route path="/lines" element={<LinesView />} />
+        <Route path="/replay" element={<ReplayView />} />
         <Route path="/platforms" element={<PlatformsView />} />
         <Route path="*" element={<Navigate to="/map" replace />} />
       </Routes>

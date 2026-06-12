@@ -1,0 +1,16 @@
+{
+ "days": [
+  {
+   "date": "2026-06-09",
+   "label": "449 trains \u00b7 avg final delay +4.4m \u00b7 worst: Worcester +17.1m",
+   "trains": 449,
+   "snapshots": 637
+  },
+  {
+   "date": "2026-06-05",
+   "label": "548 trains \u00b7 avg final delay +3.8m \u00b7 worst: Newburyport +11.2m",
+   "trains": 548,
+   "snapshots": 637
+  }
+ ]
+}

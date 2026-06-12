@@ -97,3 +97,17 @@ tr.detail td { background: rgba(255,255,255,.02); }
   background: rgba(217,154,30,.15); border: 1px solid rgba(217,154,30,.4);
   color: var(--amber); border-radius: 999px; padding: 1px 8px; font-size: 12px; white-space: nowrap;
 }
+
+.replay-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.replay-clock { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 16px; margin-left: 4px; }
+.scrubber { width: 100%; accent-color: var(--cr); margin: 2px 0 10px; }
+.replay-layout { display: flex; gap: 12px; align-items: stretch; }
+.replay-layout .map { flex: 1; min-width: 0; }
+.replay-panel { width: 250px; flex-shrink: 0; overflow-y: auto; }
+.replay-panel h2 { margin-top: 4px; }
+.ticker-row { display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 6px; border-bottom: 1px solid var(--line); font-size: 13px; }
+@media (max-width: 760px) {
+  .replay-layout { flex-direction: column; }
+  .replay-panel { width: auto; }
+}
