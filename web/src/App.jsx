@@ -6,6 +6,7 @@ import StationsView from './views/StationsView.jsx'
 import LinesView from './views/LinesView.jsx'
 import PlatformsView from './views/PlatformsView.jsx'
 import ReplayView from './views/ReplayView.jsx'
+import DisruptionView from './views/DisruptionView.jsx'
 import SWUpdate from './SWUpdate.jsx'
 import { supported as notifySupported, getWatches, checkAll } from './watches'
 
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="/stations" element={<StationsView />} />
         <Route path="/lines" element={<LinesView />} />
         <Route path="/replay" element={<ReplayView />} />
+        <Route path="/demo/disruption" element={<DisruptionView />} />
         <Route path="/platforms" element={<PlatformsView />} />
         <Route path="*" element={<Navigate to="/map" replace />} />
       </Routes>

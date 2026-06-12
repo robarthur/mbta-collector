@@ -456,6 +456,48 @@ def parse_alerts(payload):
     return {"by_train": by_train, "items": items}
 
 
+async def fetch_stop_departures_all_modes(stop, api_key=None):
+    """Upcoming predictions at a stop across ALL modes (no route_type filter) — used to
+    offer alternatives during a disruption (subway/bus/other CR at the same station)."""
+    params = {"filter[stop]": stop, "include": "route,trip",
+              "sort": "departure_time", "page[limit]": "60"}
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.get(f"{API_BASE}/predictions", params=params, headers=_headers(api_key))
+        r.raise_for_status()
+        return r.json()
+
+
+ROUTE_TYPE_MODE = {0: "subway", 1: "subway", 2: "cr", 3: "bus", 4: "ferry"}
+
+
+def parse_alternatives(payload):
+    """Rows: {mode, route_id, route_name, color, headsign, time} for upcoming departures."""
+    routes, trips = {}, {}
+    for inc in payload.get("included") or []:
+        a = inc.get("attributes") or {}
+        if inc.get("type") == "route":
+            routes[inc.get("id")] = {"type": a.get("type"),  # route resource uses `type`
+                                     "name": a.get("long_name") or inc.get("id"),
+                                     "color": a.get("color")}
+        elif inc.get("type") == "trip":
+            trips[inc.get("id")] = a.get("headsign")
+    out = []
+    for p in payload.get("data") or []:
+        a = p.get("attributes") or {}
+        rel = p.get("relationships") or {}
+        t = a.get("departure_time")
+        if not isinstance(t, str):  # JsNull-safe; arrivals-only rows can't be boarded
+            continue
+        rt = routes.get(_rel_id(rel, "route"), {})
+        out.append({"mode": ROUTE_TYPE_MODE.get(rt.get("type"), "other"),
+                    "route_id": _rel_id(rel, "route"), "route_name": rt.get("name"),
+                    "color": rt.get("color"),
+                    "headsign": trips.get(_rel_id(rel, "trip")),
+                    "time": t})
+    out.sort(key=lambda r: r["time"])
+    return out
+
+
 def known_track(obs, track_map):
     """(track, via) for an observation, or (None, None) if the track isn't knowable yet.
 

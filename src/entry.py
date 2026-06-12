@@ -519,6 +519,25 @@ class Default(WorkerEntrypoint):
                    for it in items if it["effect"] in ALERT_BANNER_EFFECTS]
             return _json({"alerts": out}, max_age=60)
 
+        if path == "/alternatives":
+            stop = (query.get("stop") or [None])[0]
+            if not stop:
+                return _json({"error": "stop required"})
+            api_key = env_get(self.env, "MBTA_API_KEY")
+            rows = mbta.parse_alternatives(
+                await mbta.fetch_stop_departures_all_modes(stop, api_key))
+            now = timeutil.now_iso()
+            by_mode = {}
+            for r in rows:
+                lead = timeutil.lead_seconds(r["time"], now)
+                if lead is None or lead < 0:
+                    continue
+                r["mins"] = lead // 60
+                by_mode.setdefault(r["mode"], [])
+                if len(by_mode[r["mode"]]) < 6:
+                    by_mode[r["mode"]].append(r)
+            return _json({"stop": stop, "by_mode": by_mode}, max_age=15)
+
         if path == "/backtest":
             return _json(await self._backtest(db), max_age=3600)
 
