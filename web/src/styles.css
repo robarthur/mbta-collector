@@ -119,3 +119,7 @@ tr.detail td { background: rgba(255,255,255,.02); }
 .mock-notif { background: #f5f5f7; color: #111; border-radius: 14px; padding: 12px 16px;
   max-width: 420px; box-shadow: 0 8px 28px rgba(0,0,0,.45); font-size: 14px; margin: 10px 0; }
 .mock-notif-app { font-size: 11px; color: #666; text-transform: uppercase; margin-bottom: 4px; }
+
+.risk { border-radius: 999px; padding: 1px 9px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.risk-disrupted { background: rgba(226,112,107,.18); border: 1px solid rgba(226,112,107,.5); color: var(--red); }
+.risk-minor { background: rgba(217,154,30,.15); border: 1px solid rgba(217,154,30,.45); color: var(--amber); }

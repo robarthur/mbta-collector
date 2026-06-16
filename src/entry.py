@@ -17,6 +17,7 @@ from urllib.parse import urlparse, parse_qs
 import asyncio
 import json
 
+import disruption
 import mbta
 import sql
 import timeutil
@@ -386,6 +387,35 @@ class Default(WorkerEntrypoint):
             return _json({
                 "by_line": _rows(await db.prepare(sql.DELAYS_BY_LINE).all()),
             })
+
+        if path == "/disruption":
+            # Honest "what's happening now" per line: current delays + active alerts -> a
+            # risk level. Not a prediction. Reuses the latest snapshot + the alerts feed.
+            api_key = env_get(self.env, "MBTA_API_KEY")
+            rows = _rows(await db.prepare(sql.TRAINS_LATEST).all())
+            alerts = mbta.parse_alerts(await mbta.fetch_alerts(api_key))["items"]
+            stats = {}
+            for r in rows:
+                rid = r.get("route_id")
+                if not rid:
+                    continue
+                s = stats.setdefault(rid, {"trains": 0, "late_count": 0, "_delays": []})
+                s["trains"] += 1
+                d = r.get("delay_s")
+                if isinstance(d, (int, float)):
+                    s["_delays"].append(d)
+                    if d > disruption.LATE_S:
+                        s["late_count"] += 1
+            out = []
+            for rid, s in stats.items():
+                ds = s.pop("_delays")
+                s["avg_delay_min"] = round(sum(ds) / len(ds) / 60, 1) if ds else 0
+                s["max_delay_min"] = round(max(ds) / 60, 1) if ds else 0
+                line_alerts = [a for a in alerts if rid in (a.get("routes") or [])]
+                out.append({"route_id": rid, **s, **disruption.score_line(s, line_alerts)})
+            order = {"disrupted": 0, "minor": 1, "ok": 2}
+            out.sort(key=lambda x: (order.get(x["level"], 3), -x["max_delay_min"]))
+            return _json({"lines": out}, max_age=30)
 
         if path == "/live-trains":
             # Real-time positions straight from the vehicles feed (seconds-fresh), with

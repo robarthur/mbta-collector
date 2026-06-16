@@ -127,10 +127,19 @@ export default function StationsView() {
   const stop = params.get('stop') || 'place-north'
   const setStop = (s) => setParams({ stop: s }, { replace: true })  // shareable URL, no history spam
   const [board, setBoard] = useState({})
+  const [risk, setRisk] = useState({})
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
 
   useEffect(() => { api('/stops').then((d) => setStops(d.stops || [])).catch(() => {}) }, [])
+  useEffect(() => {
+    const load = () => api('/disruption')
+      .then((d) => setRisk(Object.fromEntries((d.lines || []).map((l) => [l.route_id, l]))))
+      .catch(() => {})
+    load()
+    const t = setInterval(load, 60000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     if (!stop) return
@@ -171,6 +180,11 @@ export default function StationsView() {
   const departures = board.departures || []
   const arrivals = board.arrivals || []
 
+  // Lines on this board that are disrupted right now -> a heads-up banner above the boards.
+  const boardRoutes = [...new Set([...departures, ...arrivals].map((r) => r.route_id))]
+  const disrupted = boardRoutes
+    .map((rid) => risk[rid]).filter((k) => k && k.level === 'disrupted')
+
   return (
     <div className="wrap">
       <label className="meta">Station&nbsp;
@@ -182,6 +196,15 @@ export default function StationsView() {
       </div>
       {err && <div className="empty err">{err}</div>}
       {notifyMsg && <div className="hint" style={{ marginTop: 10 }}>{notifyMsg}</div>}
+      {disrupted.length > 0 && (
+        <div className="alerts">
+          {disrupted.map((k) => (
+            <div key={k.route_id} className="alert alert-red">
+              <b>{shortLine(k.route_id)} disrupted</b> {k.reasons.join('; ')} — expect delays
+            </div>
+          ))}
+        </div>
+      )}
       <Alerts items={board.alerts} />
       <Board title={`Departures — ${stationName || '…'}`} rows={departures} loading={loading}
         watchable={notifySupported} onToggle={toggleWatch} />

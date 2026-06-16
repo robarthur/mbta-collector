@@ -23,6 +23,7 @@ export default function LinesView() {
   const [delays, setDelays] = useState([])
   const [hist, setHist] = useState({ by_route: [], by_day: [], by_hour_et: [] })
   const [alerts, setAlerts] = useState([])
+  const [risk, setRisk] = useState({})
   const [open, setOpen] = useState(null)
   const [err, setErr] = useState(null)
 
@@ -30,8 +31,13 @@ export default function LinesView() {
     let active = true
     const load = async () => {
       try {
-        const [d, h, a] = await Promise.all([api('/delays'), api('/history'), api('/alerts')])
-        if (active) { setDelays(d.by_line || []); setHist(h); setAlerts(a.alerts || []); setErr(null) }
+        const [d, h, a, dis] = await Promise.all([
+          api('/delays'), api('/history'), api('/alerts'), api('/disruption')])
+        if (active) {
+          setDelays(d.by_line || []); setHist(h); setAlerts(a.alerts || [])
+          setRisk(Object.fromEntries((dis.lines || []).map((l) => [l.route_id, l])))
+          setErr(null)
+        }
       } catch { if (active) setErr('failed to load') }
     }
     load()
@@ -69,7 +75,14 @@ export default function LinesView() {
                 </td>
                 <td style={{ color: delayColor(r.avg_delay_min * 60) }}>{r.avg_delay_min}m</td>
                 <td className="meta">{r.worst_min}m</td>
-                <td className="meta">{cur ? `${cur.trains} trains · ${cur.avg_delay_min.toFixed(1)}m` : '—'}</td>
+                <td>{(() => {
+                  const k = risk[rid]
+                  if (k && k.level !== 'ok') {
+                    return <span className={'risk risk-' + k.level} title={k.reasons.join('; ')}>
+                      {k.level === 'disrupted' ? 'Disrupted' : 'Minor'}</span>
+                  }
+                  return <span className="meta">{cur ? `${cur.trains} running · ${cur.avg_delay_min.toFixed(1)}m` : '—'}</span>
+                })()}</td>
                 <td>{al.length > 0 && <span className="alert-badge">⚠ {al.length}</span>}</td>
               </tr>,
               isOpen && (
